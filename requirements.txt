@@ -1,0 +1,35 @@
+# UI
+streamlit
+groq          # Optional — for cloud AI (Groq API keys)
+ollama        # Optional — for local free AI (Ollama)
+
+# Server
+fastapi
+uvicorn[standard]
+httpx
+beautifulsoup4
+duckduckgo-search
+pydantic
+tomli
+
+# AI clients
+openai          # OpenAI-compatible (LM Studio, vLLM, llama.cpp)
+ollama          # Ollama
+
+# Storage
+aiosqlite
+
+# Optional upgrades
+playwright      # JS-rendered page scraping (install: playwright install chromium)
+redis           # Redis cache backend (alternative to SQLite)
+slowapi         # Rate limiting (for hosting publicly)
+sentence-transformers  # Semantic cache
+numpy           # Vector math for semantic cache
+
+# Testing
+pytest
+pytest-asyncio
+
+# Observability
+opentelemetry-api
+opentelemetry-sdk
