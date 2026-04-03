@@ -6,10 +6,25 @@ Usage:
     streamlit run chat_app.py
 """
 
-import os
-import json
 import httpx
 import streamlit as st
+from html import escape
+from urllib.parse import parse_qs, unquote, urlparse
+import time
+
+PHONE_UA_MARKERS = (
+    "iphone",
+    "android",
+    "mobile",
+    "windows phone",
+    "opera mini",
+    "iemobile",
+    "ipod",
+)
+
+
+def ua_is_phone(user_agent: str) -> bool:
+    return any(marker in (user_agent or "").lower() for marker in PHONE_UA_MARKERS)
 
 try:
     from groq import Groq
@@ -17,11 +32,19 @@ try:
 except ImportError:
     HAS_GROQ = False
 
+_initial_user_agent = ""
+try:
+    _headers = getattr(getattr(st, "context", None), "headers", None)
+    if _headers:
+        _initial_user_agent = _headers.get("user-agent") or _headers.get("User-Agent") or ""
+except Exception:
+    _initial_user_agent = ""
+
 st.set_page_config(
     page_title="Fetch",
     page_icon="◈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed" if ua_is_phone(_initial_user_agent) else "expanded",
 )
 
 # ------------------------------------------------------------------------------
@@ -32,22 +55,61 @@ def init_session():
         st.session_state.messages = []
     if "key_index" not in st.session_state:
         st.session_state.key_index = 0
+    if "exp_ai" not in st.session_state: st.session_state.exp_ai = True
+    if "exp_search" not in st.session_state: st.session_state.exp_search = False
+    if "exp_advanced" not in st.session_state: st.session_state.exp_advanced = False
+    if "exp_status" not in st.session_state: st.session_state.exp_status = False
+    if "exp_behavior" not in st.session_state: st.session_state.exp_behavior = False
+    default_settings = {
+        "show_sources": True,
+        "provider": "groq",
+        "ollama_url": "http://localhost:11434",
+        "ollama_model": "qwen2.5",
+        "groq_keys": "",
+        "groq_model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "search_server": "http://localhost:8000",
+        "max_results": 5,
+        "ollama_fast_mode": True,
+        "response_mode": "Balanced",
+        "temperature": 0.2,
+        "max_response_length": "Medium",
+        "search_region": "All",
+        "auto_scroll": True,
+        # Advanced
+        "context_results_limit": 0,
+        "context_snippet_chars": 0,
+        "search_timeout_s": 20,
+        "search_all_endpoint_limit": 3,
+        "groq_max_tokens": 0,
+        "ollama_num_predict": 0,
+        "ollama_context_length": 0,
+        "ollama_top_p": 0.9,
+        "ollama_keep_alive": "20m",
+        "ollama_timeout_s": 0,
+    }
     if "settings" not in st.session_state:
-        st.session_state.settings = {
-            "provider": "groq",
-            "ollama_url": "http://localhost:11434",
-            "ollama_model": "qwen2.5",
-            "groq_keys": "",  # Empty – users must add their own keys
-            "groq_model": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "search_server": "http://localhost:8000",
-            "max_results": 5,
-        }
+        st.session_state.settings = default_settings.copy()
+    else:
+        for key, value in default_settings.items():
+            st.session_state.settings.setdefault(key, value)
     if "dark_mode" not in st.session_state:
         st.session_state.dark_mode = False
+    if "loading_screen_rendered" not in st.session_state:
+        st.session_state.loading_screen_rendered = False
+    # Cache for sidebards status to avoid repeated network calls
+    if "last_health_check" not in st.session_state:
+        st.session_state.last_health_check = 0
+        st.session_state.cached_server_ok = False
+        st.session_state.cached_ollama_ok = False
+        st.session_state.cached_ollama_models = []
+    if "cached_ollama_url" not in st.session_state:
+        st.session_state.cached_ollama_url = ""
+    if "last_ollama_check" not in st.session_state:
+        st.session_state.last_ollama_check = 0.0
 
 
 # ------------------------------------------------------------------------------
-# Custom CSS – dynamic light/dark theme
+# Custom CSS – dynamic light/dark theme (with larger chat input)
 # ------------------------------------------------------------------------------
 def get_css(dark_mode):
     # Base variables (light)
@@ -88,6 +150,8 @@ def get_css(dark_mode):
                 --shadow-lg: 0 16px 48px rgba(10,9,8,0.16), 0 4px 12px rgba(10,9,8,0.1);
                 --font-display: 'Syne', sans-serif;
                 --font-mono: 'DM Mono', monospace;
+                --chat-max-width: 1400px;
+                --chat-input-min-height: 220px;
             }
         """
     else:
@@ -128,18 +192,74 @@ def get_css(dark_mode):
                 --shadow-lg: 0 16px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.5);
                 --font-display: 'Syne', sans-serif;
                 --font-mono: 'DM Mono', monospace;
+                --chat-max-width: 1400px;
+                --chat-input-min-height: 220px;
             }
         """
 
 
-def render_css(dark_mode):
+def render_css(dark_mode, is_phone=False):
     css = get_css(dark_mode) + """
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { 
+        box-sizing: border-box; 
+        margin: 0; 
+        padding: 0; 
+        transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
+    }
+
+    /* LOADING SCREEN */
+    #initial-loading-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        background: var(--cream);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        animation: loaderAutoDismiss 0.55s ease 4s forwards;
+    }
+    #initial-loading-screen.hidden {
+        opacity: 0 !important;
+        visibility: hidden !important;
+        transition: all 0.55s ease !important;
+    }
+    #initial-loading-screen.fade-out {
+        opacity: 0 !important;
+        visibility: hidden !important;
+        transition: all 0.55s ease !important;
+    }
+    @keyframes loaderAutoDismiss {
+        to { opacity: 0; visibility: hidden; pointer-events: none; }
+    }
+    .loader-icon {
+        font-size: 48px;
+        color: var(--ink);
+        animation: spinRotate 1s infinite cubic-bezier(0.5, 0, 0.5, 1);
+        margin-bottom: 16px;
+    }
+    .loader-text {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        letter-spacing: 2px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+    }
+    @keyframes spinRotate {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
 
     .stApp {
         background: var(--cream);
-        color: var(--ink);
+        color: var(--ink) !important;
         font-family: var(--font-display);
+    }
+
+    /* FIX LIGHT MODE TEXT */
+    p, span, div, label, h1, h2, h3, h4, h5, h6, li, ul, ol, button, input, textarea {
+        color: var(--ink) !important;
     }
 
     /* Ruled paper texture */
@@ -159,64 +279,79 @@ def render_css(dark_mode):
         z-index: 0;
     }
 
-    /* Keep Streamlit chrome minimal and keep settings visible */
+    /* Keep Streamlit chrome minimal */
     [data-testid="stHeader"] {
         background: transparent !important;
         z-index: 100 !important;
     }
 
-    /* Keep Streamlit settings menu visible on the left */
-    #MainMenu {
-        visibility: visible !important;
-        opacity: 1 !important;
-        pointer-events: auto !important;
-        position: fixed !important;
-        top: 12px !important;
-        left: 12px !important;
-        z-index: 10000 !important;
-        background: var(--paper) !important;
-        border: 1px solid var(--border-strong) !important;
-        border-radius: 3px !important;
-        box-shadow: var(--shadow-sm) !important;
-    }
+    #MainMenu { display: none !important; }
 
-    /* Fallback: if Streamlit renders a collapsed-sidebar control, pin it left */
+    /* Custom Hamburger Settings Button */
     [data-testid="stSidebarCollapsedControl"],
-    button[aria-label="Show sidebar"] {
+    button[aria-label="Show sidebar"], 
+    [data-testid="stSidebarCollapseButton"],
+    button[aria-label="Collapse sidebar"] {
         display: flex !important;
         visibility: visible !important;
         opacity: 1 !important;
         position: fixed !important;
         top: 12px !important;
-        left: 52px !important;
+        left: 12px !important;
         right: auto !important;
-        z-index: 9999 !important;
+        z-index: 10001 !important;
         background: var(--paper) !important;
         border: 1px solid var(--border-strong) !important;
         border-radius: 3px !important;
-        width: 40px !important;
-        height: 40px !important;
+        width: 44px !important;
+        height: 44px !important;
         align-items: center !important;
         justify-content: center !important;
         cursor: pointer !important;
         pointer-events: auto !important;
-        transition: all 0.2s ease !important;
+        transition: all 0.3s ease !important;
         box-shadow: var(--shadow-sm) !important;
     }
 
+    [data-testid="stSidebarCollapsedControl"] svg,
+    button[aria-label="Show sidebar"] svg,
+    [data-testid="stSidebarCollapseButton"] svg,
+    button[aria-label="Collapse sidebar"] svg {
+        display: none !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"]::after,
+    button[aria-label="Show sidebar"]::after,
+    [data-testid="stSidebarCollapseButton"]::after,
+    button[aria-label="Collapse sidebar"]::after {
+        content: '☰';
+        font-size: 22px;
+        color: var(--ink) !important;
+        line-height: 1;
+        transition: transform 0.3s ease;
+    }
+
+    [data-testid="stSidebarCollapseButton"]::after,
+    button[aria-label="Collapse sidebar"]::after {
+        content: '✕';
+        font-size: 18px;
+    }
+
     [data-testid="stSidebarCollapsedControl"]:hover,
-    button[aria-label="Show sidebar"]:hover {
+    button[aria-label="Show sidebar"]:hover,
+    [data-testid="stSidebarCollapseButton"]:hover,
+    button[aria-label="Collapse sidebar"]:hover {
         background: var(--rust) !important;
         border-color: var(--rust) !important;
         transform: scale(1.05) !important;
         box-shadow: var(--shadow-md) !important;
     }
-
-    [data-testid="stSidebarCollapsedControl"] svg,
-    button[aria-label="Show sidebar"] svg {
-        fill: var(--ink) !important;
-        width: 20px !important;
-        height: 20px !important;
+    
+    [data-testid="stSidebarCollapsedControl"]:hover::after,
+    [data-testid="stSidebarCollapseButton"]:hover::after,
+    button[aria-label="Show sidebar"]:hover::after,
+    button[aria-label="Collapse sidebar"]:hover::after {
+        color: white !important;
     }
 
     footer { display: none !important; }
@@ -234,8 +369,7 @@ def render_css(dark_mode):
     }
 
     [data-testid="stSidebar"][aria-expanded="false"] {
-        transform: translateX(0) !important;
-        margin-left: 0 !important;
+        margin-left: min(-320px, -86vw) !important;
     }
 
     [data-testid="stSidebarCollapseButton"] {
@@ -387,7 +521,7 @@ def render_css(dark_mode):
 
     /* Main layout */
     .main-wrap {
-        max-width: 780px;
+        max-width: var(--chat-max-width);
         margin: 0 auto;
         padding: 0 24px 140px;
         position: relative;
@@ -747,7 +881,7 @@ def render_css(dark_mode):
 
     /* The input container */
     [data-testid="stChatInput"] > div {
-        max-width: 780px !important;
+        max-width: var(--chat-max-width) !important;
         margin: 0 auto !important;
         background: var(--paper) !important;
         border: none !important;
@@ -769,6 +903,7 @@ def render_css(dark_mode):
         resize: none !important;
         line-height: 1.5 !important;
         letter-spacing: -0.01em !important;
+        min-height: var(--chat-input-min-height) !important;
     }
 
     [data-testid="stChatInput"] textarea::placeholder {
@@ -884,22 +1019,253 @@ def render_css(dark_mode):
         .page-meta { text-align: left; }
         .msg-row { gap: 10px; }
         .msg-avatar { width: 26px; height: 26px; font-size: 8px; }
+        .msg-body { max-width: calc(100% - 36px); }
+        .user-bubble, .bot-bubble { font-size: 13px; }
+        .result-title { font-size: 12px; }
+        .result-snippet { font-size: 10px; }
+        [data-testid="stSidebar"] {
+            width: min(86vw, 290px) !important;
+            min-width: min(86vw, 290px) !important;
+            max-width: min(86vw, 290px) !important;
+        }
+        [data-testid="stChatInput"] > div {
+            max-width: 100% !important;
+        }
+        [data-testid="stChatInput"] textarea {
+            font-size: 16px !important;
+            padding: 14px 14px !important;
+            min-height: 140px !important;
+        }
+        [data-testid="stChatInput"] button {
+            margin: 8px 10px !important;
+            width: 34px !important;
+            height: 34px !important;
+        }
         .welcome-wrap { padding: 48px 0 32px; }
     }
     </style>
     """
+    if is_phone:
+        css += """
+        <style>
+        .main-wrap {
+            max-width: 100% !important;
+            padding: 0 12px 170px !important;
+        }
+        [data-testid="stChatInput"] > div {
+            max-width: 100% !important;
+            margin: 0 !important;
+        }
+        [data-testid="stSidebar"] {
+            width: min(84vw, 280px) !important;
+            min-width: min(84vw, 280px) !important;
+            max-width: min(84vw, 280px) !important;
+            transform: none !important;
+        }
+        [data-testid="stSidebarCollapseButton"] {
+            display: flex !important;
+        }
+        </style>
+        """
     return css
+
+
+# ------------------------------------------------------------------------------
+# Helper functions
+# ------------------------------------------------------------------------------
+SUMMARY_SYSTEM_PROMPT = "explain the topic in 3-5 sentences, mention sources briefly."
+DETAILED_SYSTEM_PROMPT = "first gather all relevant info from sources, then write a thorough multi-paragraph explanation with context, analysis, and explicit source citations."
+FAST_SYSTEM_PROMPT = "return only 1-2 sentences of pure facts, zero explanation, zero commentary."
+
+def get_mode_params(mode: str, base_max_tokens: int, base_context: int):
+    if mode == "Fast":
+        return FAST_SYSTEM_PROMPT, 100, max(5, int(base_context * 0.5))
+    elif mode == "Detailed":
+        return DETAILED_SYSTEM_PROMPT, 1200, int(base_context * 2.0)
+    else: # Balanced
+        return SUMMARY_SYSTEM_PROMPT, 350, base_context
+
+
+def get_response_char_limit(length_label: str) -> int:
+    if length_label == "Short":
+        return 700
+    if length_label == "Long":
+        return 2200
+    return 1200
+
+REDIRECT_QUERY_KEYS = (
+    "uddg",
+    "url",
+    "u",
+    "target",
+    "dest",
+    "destination",
+    "redirect",
+    "redirect_url",
+    "r",
+)
+
+KNOWN_REDIRECT_HOSTS = {
+    "duckduckgo.com",
+    "google.com",
+    "bing.com",
+    "search.yahoo.com",
+    "r.search.yahoo.com",
+    "l.facebook.com",
+    "lm.facebook.com",
+}
+
+
+def detect_phone_device() -> bool:
+    user_agent = ""
+    try:
+        headers = getattr(getattr(st, "context", None), "headers", None)
+        if headers:
+            user_agent = headers.get("user-agent") or headers.get("User-Agent") or ""
+    except Exception:
+        user_agent = ""
+    return ua_is_phone(user_agent)
+
+
+def normalize_result_url(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+    url = str(raw_url).strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        url = f"https:{url}"
+    if "://" not in url and not url.startswith("/") and "." in url.split("/")[0]:
+        url = f"https://{url}"
+    if url.startswith("/") and "uddg=" in url:
+        url = f"https://duckduckgo.com{url}"
+    if url.startswith("/"):
+        local_params = parse_qs(urlparse(url).query)
+        for key in (*REDIRECT_QUERY_KEYS, "q"):
+            values = local_params.get(key)
+            if not values:
+                continue
+            candidate = unquote(values[0]).strip()
+            if candidate.startswith("//"):
+                candidate = f"https:{candidate}"
+            if "://" not in candidate and candidate.startswith("www."):
+                candidate = f"https://{candidate}"
+            if urlparse(candidate).scheme in {"http", "https"}:
+                url = candidate
+                break
+
+    for _ in range(3):
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return ""
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        query_params = parse_qs(parsed.query)
+        unwrapped = ""
+        if host in KNOWN_REDIRECT_HOSTS or any(k in query_params for k in REDIRECT_QUERY_KEYS):
+            for key in REDIRECT_QUERY_KEYS:
+                values = query_params.get(key)
+                if not values:
+                    continue
+                candidate = unquote(values[0]).strip()
+                if candidate.startswith("//"):
+                    candidate = f"https:{candidate}"
+                if "://" not in candidate and candidate.startswith("www."):
+                    candidate = f"https://{candidate}"
+                candidate_parsed = urlparse(candidate)
+                if candidate_parsed.scheme in {"http", "https"}:
+                    unwrapped = candidate
+                    break
+        if not unwrapped or unwrapped == url:
+            break
+        url = unwrapped
+    return url
+
+
+def normalize_results(results: list) -> list:
+    cleaned = []
+    seen = set()
+    for r in results:
+        title = (r.get("title") or "").strip()
+        snippet = (r.get("snippet") or "").strip()
+        source = (r.get("source") or "").strip()
+        url = normalize_result_url(r.get("url", ""))
+        key = url or f"{title}|{source}"
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(
+            {
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "source": source,
+            }
+        )
+    return cleaned
+
+
+def build_results_context(results: list, max_items: int = 6, max_snippet_chars: int = 280):
+    lines = []
+    for i, r in enumerate(results[:max_items], 1):
+        lines.append(
+            f"{i}. {r.get('title', '')}\n"
+            f"   URL: {r.get('url', '')}\n"
+            f"   {(r.get('snippet', '') or '')[:max_snippet_chars]}"
+        )
+    return "\n\n".join(lines)
+
+
+def format_summary_text(text: str, max_chars: int = 900) -> str:
+    cleaned = (text or "").strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    clipped = cleaned[:max_chars].rsplit(" ", 1)[0]
+    return f"{clipped}..."
+
+
+def html_text(text: str) -> str:
+    return escape((text or "").strip()).replace("\n", "<br>")
 
 
 init_session()
 settings = st.session_state.settings
+is_phone = detect_phone_device()
 
 # Render CSS with current dark mode
-st.markdown(render_css(st.session_state.dark_mode), unsafe_allow_html=True)
+st.markdown(render_css(st.session_state.dark_mode, is_phone=is_phone), unsafe_allow_html=True)
 
-# ------------------------------------------------------------------------------
-# Helper functions (unchanged except keys removal)
-# ------------------------------------------------------------------------------
+# Render loading screen only once – stays until UI is ready
+if not st.session_state.loading_screen_rendered:
+    st.markdown("""
+    <div id="initial-loading-screen">
+        <div class="loader-icon">◈</div>
+        <div class="loader-text">Loading interface...</div>
+    </div>
+    <script>
+        function removeLoadingScreen() {
+            const loader = document.getElementById('initial-loading-screen');
+            if (loader) {
+                loader.classList.add('fade-out');
+                setTimeout(() => loader.remove(), 500);
+            }
+        }
+        // Wait for the chat input to appear
+        const observer = new MutationObserver((mutations, obs) => {
+            if (document.querySelector('[data-testid="stChatInput"] textarea')) {
+                removeLoadingScreen();
+                obs.disconnect();
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        // Fallback: remove after 5 seconds anyway
+        setTimeout(removeLoadingScreen, 5000);
+    </script>
+    """, unsafe_allow_html=True)
+    st.session_state.loading_screen_rendered = True
+
+
 def get_groq_keys():
     raw = st.session_state.settings.get("groq_keys", "")
     return [k.strip() for k in raw.split("\n") if k.strip()]
@@ -914,16 +1280,17 @@ def get_next_groq_key():
     return keys[idx]
 
 
-def search_web(query: str, server: str, max_results: int):
+def search_web(query: str, server: str, max_results: int, timeout_s: int = 20, all_endpoint_limit: int = 3):
     endpoints = [f"{server}/search", f"{server}/search/all"]
     for url in endpoints:
         try:
-            with httpx.Client(timeout=20) as client:
-                params = {"q": query, "max_results": 3 if "/all" in url else max_results}
+            with httpx.Client(timeout=timeout_s) as client:
+                endpoint_max_results = all_endpoint_limit if "/all" in url else max_results
+                params = {"q": query, "max_results": max(1, int(endpoint_max_results))}
                 resp = client.get(url, params=params)
                 resp.raise_for_status()
                 data = resp.json()
-                results = data.get("results", [])
+                results = normalize_results(data.get("results", []))
                 backend = data.get("backend_used", data.get("backends_queried", ["unknown"]))
                 if isinstance(backend, list):
                     backend = ", ".join(backend)
@@ -934,10 +1301,26 @@ def search_web(query: str, server: str, max_results: int):
     return [], "none"
 
 
-def ai_summarize_groq(query: str, results: list, model: str):
-    context = ""
-    for i, r in enumerate(results, 1):
-        context += f"{i}. {r.get('title', '')}\n   URL: {r.get('url', '')}\n   {r.get('snippet', '')}\n\n"
+def ai_summarize_groq(
+    query: str,
+    results: list,
+    model: str,
+    mode: str,
+    temperature: float = 0.2,
+    max_tokens_override: int | None = None,
+    context_items_override: int | None = None,
+    context_snippet_chars: int | None = None,
+    response_char_limit: int = 1200,
+):
+    sys_prompt, default_max_tokens, default_max_items = get_mode_params(mode, 320, 6)
+    max_tokens = max_tokens_override if max_tokens_override else default_max_tokens
+    max_items = context_items_override if context_items_override else default_max_items
+    max_snippet_chars = context_snippet_chars if context_snippet_chars else 280
+    context = build_results_context(
+        results,
+        max_items=max(1, int(max_items)),
+        max_snippet_chars=max(80, int(max_snippet_chars)),
+    )
 
     api_key = get_next_groq_key()
     if not api_key:
@@ -948,23 +1331,52 @@ def ai_summarize_groq(query: str, results: list, model: str):
         messages=[
             {
                 "role": "system",
-                "content": "You are a precise web research assistant. Synthesize the search results into a clear, factual summary. Be direct. Mention key sources. Keep it under 200 words.",
+                "content": sys_prompt,
             },
             {"role": "user", "content": f"Query: {query}\n\nResults:\n{context}"},
         ],
-        max_tokens=1500,
-        temperature=0.3,
+        max_tokens=max(64, int(max_tokens)),
+        temperature=temperature,
     )
-    return response.choices[0].message.content
+    return format_summary_text(response.choices[0].message.content, max_chars=max(300, int(response_char_limit)))
 
 
-def ai_summarize_ollama(query: str, results: list, model: str, ollama_url: str):
-    context = ""
-    for i, r in enumerate(results, 1):
-        context += f"{i}. {r.get('title', '')}\n   URL: {r.get('url', '')}\n   {r.get('snippet', '')}\n\n"
+def ai_summarize_ollama(
+    query: str,
+    results: list,
+    model: str,
+    ollama_url: str,
+    mode: str,
+    temperature: float = 0.2,
+    num_predict_override: int | None = None,
+    context_items_override: int | None = None,
+    context_snippet_chars: int | None = None,
+    context_length_override: int | None = None,
+    top_p: float = 0.9,
+    keep_alive: str = "20m",
+    timeout_s_override: int | None = None,
+    response_char_limit: int = 1200,
+):
+    sys_prompt, default_num_predict, default_max_items = get_mode_params(mode, 320, 8)
+    num_predict = num_predict_override if num_predict_override else default_num_predict
+    max_items = context_items_override if context_items_override else default_max_items
+    max_snippet_chars = context_snippet_chars if context_snippet_chars is not None else (220 if mode == "Fast" else 400)
+    context = build_results_context(
+        results,
+        max_items=max(1, int(max_items)),
+        max_snippet_chars=max(80, int(max_snippet_chars)),
+    )
+    num_ctx = context_length_override if context_length_override else (2048 if mode == "Fast" else (8192 if mode == "Detailed" else 4096))
+    options = {
+        "temperature": temperature,
+        "top_p": max(0.1, min(1.0, float(top_p))),
+        "num_predict": max(64, int(num_predict)),
+        "num_ctx": max(512, int(num_ctx)),
+    }
+    timeout_s = timeout_s_override if timeout_s_override else (40 if mode == "Fast" else (120 if mode == "Detailed" else 60))
 
     try:
-        with httpx.Client(timeout=60) as client:
+        with httpx.Client(timeout=timeout_s) as client:
             resp = client.post(
                 f"{ollama_url}/api/chat",
                 json={
@@ -972,18 +1384,87 @@ def ai_summarize_ollama(query: str, results: list, model: str, ollama_url: str):
                     "messages": [
                         {
                             "role": "system",
-                            "content": "You are a precise web research assistant. Synthesize the search results into a clear, factual summary. Be direct. Mention key sources. Keep it under 200 words.",
+                            "content": sys_prompt,
                         },
                         {"role": "user", "content": f"Query: {query}\n\nResults:\n{context}"},
                     ],
                     "stream": False,
+                    "keep_alive": keep_alive or "20m",
+                    "options": options,
                 },
             )
             resp.raise_for_status()
             data = resp.json()
-            return data.get("message", {}).get("content", "")
+            return format_summary_text(data.get("message", {}).get("content", ""), max_chars=max(300, int(response_char_limit)))
     except Exception:
         return None
+
+
+def check_search_server_health(url: str) -> bool:
+    try:
+        with httpx.Client(timeout=3) as c:
+            c.get(f"{url}/health")
+        return True
+    except Exception:
+        return False
+
+def check_ollama_health(url: str) -> bool:
+    try:
+        with httpx.Client(timeout=3) as c:
+            c.get(f"{url}/api/tags")
+        return True
+    except Exception:
+        return False
+
+def get_ollama_models(url: str) -> list:
+    try:
+        with httpx.Client(timeout=3) as c:
+            r = c.get(f"{url}/api/tags")
+            if r.status_code == 200:
+                return [m["name"] for m in r.json().get("models", [])]
+    except Exception:
+        pass
+    return []
+
+def refresh_ollama_cache(url: str, force: bool = False):
+    now = time.time()
+    normalized_url = (url or "").rstrip("/")
+    cached_url = st.session_state.get("cached_ollama_url", "")
+    stale = now - st.session_state.get("last_ollama_check", 0.0) > 15
+    should_refresh = force or stale or normalized_url != cached_url
+
+    if should_refresh:
+        st.session_state.cached_ollama_ok = check_ollama_health(normalized_url)
+        st.session_state.cached_ollama_models = get_ollama_models(normalized_url)
+        st.session_state.cached_ollama_url = normalized_url
+        st.session_state.last_ollama_check = now
+
+
+def pick_ollama_model(models: list[str], current_model: str) -> str:
+    if not models:
+        return current_model or ""
+    if current_model in models:
+        return current_model
+    preferred = ["qwen2.5", "qwen3", "llama3.2", "llama3.1", "mistral", "gemma3"]
+    model_lut = {m.lower(): m for m in models}
+    for base in preferred:
+        for name_lc, original in model_lut.items():
+            if name_lc == base or name_lc.startswith(base + ":"):
+                return original
+    return models[0]
+
+
+# ---- Optimized sidebar: cached status checks ----
+# Refresh health cache every 30 seconds (on demand)
+def refresh_health_cache():
+    now = time.time()
+    if now - st.session_state.last_health_check > 30:
+        st.session_state.cached_server_ok = check_search_server_health(settings["search_server"])
+        refresh_ollama_cache(settings["ollama_url"], force=True)
+        st.session_state.last_health_check = now
+
+# Call once per render (lightweight check of timestamp)
+refresh_health_cache()
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -1010,147 +1491,200 @@ with st.sidebar:
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── AI Provider ─────────────────────────────────────────────────────
-    st.markdown("""<div class="sb-section">""", unsafe_allow_html=True)
-    st.markdown('<div class="sb-section-label">AI Engine</div>', unsafe_allow_html=True)
-
-    settings["provider"] = st.radio(
-        "Provider",
-        options=["groq", "ollama"],
-        format_func=lambda x: "Groq Cloud" if x == "groq" else "Ollama Local",
-        index=0 if settings["provider"] == "groq" else 1,
-        label_visibility="collapsed",
-    )
-
-    if settings["provider"] == "ollama":
-        settings["ollama_url"] = st.text_input(
-            "Ollama URL",
-            value=settings["ollama_url"],
-            placeholder="http://localhost:11434",
+    # ── Settings & AI Configuration ─────────────────────────────────────────────
+    with st.expander("🤖 AI Engine", expanded=st.session_state.exp_ai):
+        settings["provider"] = st.radio(
+            "Provider",
+            options=["groq", "ollama"],
+            format_func=lambda x: "Groq Cloud" if x == "groq" else "Ollama Local",
+            index=0 if settings["provider"] == "groq" else 1,
+            label_visibility="collapsed",
         )
-        settings["ollama_model"] = st.text_input(
-            "Model name",
-            value=settings["ollama_model"],
-            placeholder="qwen2.5",
+
+        modes = ["Fast", "Balanced", "Detailed"]
+        settings["response_mode"] = st.selectbox(
+            "AI Output Mode (Detail Level)",
+            modes,
+            index=modes.index(settings.get("response_mode", "Balanced")) if settings.get("response_mode") in modes else 1,
+            help="Fast: Direct answer, no AI explanation. Balanced: Fetches info and roughly explains. Detailed: Fetches info and explains deeply."
         )
-        try:
-            with httpx.Client(timeout=3) as c:
-                r = c.get(f"{settings['ollama_url']}/api/tags")
-                if r.status_code == 200:
-                    models = [m["name"] for m in r.json().get("models", [])]
-                    if models:
-                        st.markdown(
-                            f'<div class="status-pill ok"><span class="status-dot ok"></span>{len(models)} models available</div>',
-                            unsafe_allow_html=True,
-                        )
-                        if settings["ollama_model"] not in models:
-                            settings["ollama_model"] = models[0]
-                        settings["ollama_model"] = st.selectbox(
-                            "Model",
-                            models,
-                            index=models.index(settings["ollama_model"])
-                            if settings["ollama_model"] in models
-                            else 0,
-                        )
-                    else:
-                        st.markdown(
-                            '<div class="status-pill warn"><span class="status-dot pulse"></span>No models — run: ollama pull qwen2.5</div>',
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.markdown(
-                        '<div class="status-pill err"><span class="status-dot err"></span>Ollama error</div>',
-                        unsafe_allow_html=True,
-                    )
-        except Exception:
-            st.markdown(
-                '<div class="status-pill err"><span class="status-dot err"></span>Ollama not running</div>',
-                unsafe_allow_html=True,
+        
+        settings["temperature"] = st.slider(
+            "Creativity level", 0.0, 1.0, settings.get("temperature", 0.2), 0.1,
+            help="Low = consistent and factual. High = more varied and creative."
+        )
+
+        if settings["provider"] == "ollama":
+            prev_ollama_url = settings["ollama_url"]
+            settings["ollama_url"] = st.text_input(
+                "Ollama URL",
+                value=settings["ollama_url"],
+                placeholder="http://localhost:11434",
             )
-    else:
-        settings["groq_keys"] = st.text_area(
-            "API Keys (one per line)",
-            value=settings["groq_keys"],
-            height=100,
-            placeholder="gsk_...\ngsk_...",
+            url_changed = settings["ollama_url"] != prev_ollama_url
+            refresh_ollama_cache(settings["ollama_url"], force=url_changed)
+
+            # Use cached models (auto-detected)
+            models = st.session_state.cached_ollama_models
+            if models:
+                settings["ollama_model"] = pick_ollama_model(models, settings.get("ollama_model", ""))
+                st.markdown(
+                    f'<div class="status-pill ok"><span class="status-dot ok"></span>{len(models)} models detected · using {settings["ollama_model"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                settings["ollama_model"] = st.selectbox(
+                    "Model (auto-detected)",
+                    models,
+                    index=models.index(settings["ollama_model"]) if settings["ollama_model"] in models else 0,
+                )
+            else:
+                # Show warning but don't block UI
+                st.markdown('<div class="status-pill warn"><span class="status-dot pulse"></span>No models — run: ollama pull qwen2.5</div>', unsafe_allow_html=True)
+        else:
+            settings["groq_keys"] = st.text_area(
+                "API Keys (one per line)",
+                value=settings["groq_keys"],
+                height=100,
+                placeholder="gsk_...\\ngsk_...",
+            )
+            groq_models = [
+                "meta-llama/llama-4-scout-17b-16e-instruct",
+                "llama-3.1-8b-instant",
+                "qwen/qwen3-32b",
+                "groq/compound",
+                "groq/compound-mini",
+                "moonshotai/kimi-k2-instruct",
+            ]
+            settings["groq_model"] = st.selectbox(
+                "Model",
+                options=groq_models,
+                index=groq_models.index(settings["groq_model"]) if settings["groq_model"] in groq_models else 0,
+            )
+            keys = get_groq_keys()
+            if keys:
+                st.markdown(f'<div class="status-pill ok"><span class="status-dot ok"></span>{len(keys)} key{"s" if len(keys) > 1 else ""} loaded {"· auto-rotating" if len(keys)>1 else ""}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="status-pill err"><span class="status-dot err"></span>No API keys</div>', unsafe_allow_html=True)
+
+    with st.expander("🔍 Search Settings", expanded=st.session_state.exp_search):
+        settings["search_server"] = st.text_input(
+            "Server URL",
+            value=settings["search_server"],
+            placeholder="http://localhost:8000",
         )
-        groq_models = [
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "llama-3.1-8b-instant",
-            "qwen/qwen3-32b",
-            "groq/compound",
-            "groq/compound-mini",
-            "moonshotai/kimi-k2-instruct",
-        ]
-        settings["groq_model"] = st.selectbox(
-            "Model",
-            options=groq_models,
-            index=groq_models.index(settings["groq_model"])
-            if settings["groq_model"] in groq_models
-            else 0,
+        settings["max_results"] = st.slider("Number of search results", 1, 10, settings["max_results"], help="More results = more info for the AI, but slightly slower")
+        
+        lengths = ["Short", "Medium", "Long"]
+        settings["max_response_length"] = st.selectbox(
+            "Answer length", 
+            lengths,
+            index=lengths.index(settings.get("max_response_length", "Medium")) if settings.get("max_response_length") in lengths else 1,
+            help="Controls how much the AI writes"
         )
-        keys = get_groq_keys()
-        if keys:
-            st.markdown(
-                f'<div class="status-pill ok"><span class="status-dot ok"></span>{len(keys)} key{"s" if len(keys) > 1 else ""} loaded · auto-rotating</div>',
-                unsafe_allow_html=True,
+        
+        regions = ["All", "US", "UK", "EU", "Asia"]
+        settings["search_region"] = st.selectbox(
+            "Search region",
+            regions,
+            index=regions.index(settings.get("search_region", "All")) if settings.get("search_region") in regions else 0,
+            help="Limits results to a specific region"
+        )
+
+    with st.expander("🧪 Advanced Settings", expanded=st.session_state.exp_advanced):
+        st.caption("Fine-tune context size, generation budget, and timeouts. Use 0 for Auto.")
+        settings["context_results_limit"] = st.slider(
+            "Context results sent to AI",
+            0,
+            20,
+            int(settings.get("context_results_limit", 0)),
+            help="How many search hits are included in the LLM prompt context. 0 = mode default.",
+        )
+        settings["context_snippet_chars"] = st.slider(
+            "Snippet chars per result",
+            0,
+            1200,
+            int(settings.get("context_snippet_chars", 0)),
+            step=20,
+            help="How much text per result is sent into AI context. 0 = mode default.",
+        )
+        settings["search_timeout_s"] = st.slider(
+            "Search timeout (seconds)",
+            5,
+            90,
+            int(settings.get("search_timeout_s", 20)),
+            help="Timeout for calls to the search backend.",
+        )
+        settings["search_all_endpoint_limit"] = st.slider(
+            "/search/all result cap",
+            1,
+            10,
+            int(settings.get("search_all_endpoint_limit", 3)),
+            help="Max results requested from fallback /search/all endpoint.",
+        )
+
+        if settings["provider"] == "groq":
+            settings["groq_max_tokens"] = st.slider(
+                "Groq max tokens",
+                0,
+                4096,
+                int(settings.get("groq_max_tokens", 0)),
+                step=32,
+                help="Upper token budget for Groq responses. 0 = mode default.",
             )
         else:
-            st.markdown(
-                '<div class="status-pill err"><span class="status-dot err"></span>No API keys</div>',
-                unsafe_allow_html=True,
+            settings["ollama_num_predict"] = st.slider(
+                "Ollama max output tokens",
+                0,
+                4096,
+                int(settings.get("ollama_num_predict", 0)),
+                step=32,
+                help="Upper token budget for local Ollama generation. 0 = mode default.",
+            )
+            settings["ollama_context_length"] = st.slider(
+                "Ollama context length",
+                0,
+                32768,
+                int(settings.get("ollama_context_length", 0)),
+                step=512,
+                help="Larger context can improve quality but uses more RAM/VRAM. 0 = mode default.",
+            )
+            settings["ollama_top_p"] = st.slider(
+                "Ollama top-p",
+                0.1,
+                1.0,
+                float(settings.get("ollama_top_p", 0.9)),
+                0.05,
+                help="Lower values are more focused; higher values are more diverse.",
+            )
+            settings["ollama_keep_alive"] = st.text_input(
+                "Ollama keep_alive",
+                value=settings.get("ollama_keep_alive", "20m"),
+                help="How long Ollama should keep the model loaded, e.g. 20m, 1h.",
+            )
+            settings["ollama_timeout_s"] = st.slider(
+                "Ollama timeout (seconds)",
+                0,
+                240,
+                int(settings.get("ollama_timeout_s", 0)),
+                help="Timeout for Ollama generation requests. 0 = mode default.",
             )
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("🩺 System Status", expanded=st.session_state.exp_status):
+        # Use cached server health
+        server_ok = st.session_state.cached_server_ok
+        cls = "ok" if server_ok else "err"
+        label = "Search server online" if server_ok else "Search server offline"
+        st.markdown(f'<div class="status-pill {cls}"><span class="status-dot {cls}"></span>{label}</div>', unsafe_allow_html=True)
 
-    # ── Search Server ───────────────────────────────────────────────────
-    st.markdown('<div class="sb-section">', unsafe_allow_html=True)
-    st.markdown('<div class="sb-section-label">Search Server</div>', unsafe_allow_html=True)
+        if settings["provider"] == "ollama":
+            ollama_ok = st.session_state.cached_ollama_ok
+            cls2 = "ok" if ollama_ok else "err"
+            label2 = "Ollama online" if ollama_ok else "Ollama offline"
+            st.markdown(f'<div class="status-pill {cls2}"><span class="status-dot {cls2}"></span>{label2}</div>', unsafe_allow_html=True)
 
-    settings["search_server"] = st.text_input(
-        "Server URL",
-        value=settings["search_server"],
-        placeholder="http://localhost:8000",
-    )
-    settings["max_results"] = st.slider("Results per query", 1, 10, settings["max_results"])
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── Status ──────────────────────────────────────────────────────────
-    st.markdown('<div class="sb-section">', unsafe_allow_html=True)
-    st.markdown('<div class="sb-section-label">Status</div>', unsafe_allow_html=True)
-
-    server_ok = False
-    try:
-        with httpx.Client(timeout=3) as c:
-            c.get(f"{settings['search_server']}/health")
-        server_ok = True
-    except Exception:
-        pass
-
-    cls = "ok" if server_ok else "err"
-    label = "Search server online" if server_ok else "Search server offline"
-    st.markdown(
-        f'<div class="status-pill {cls}"><span class="status-dot {cls}"></span>{label}</div>',
-        unsafe_allow_html=True,
-    )
-
-    if settings["provider"] == "ollama":
-        ollama_ok = False
-        try:
-            with httpx.Client(timeout=3) as c:
-                c.get(f"{settings['ollama_url']}/api/tags")
-            ollama_ok = True
-        except Exception:
-            pass
-        cls2 = "ok" if ollama_ok else "err"
-        label2 = "Ollama online" if ollama_ok else "Ollama offline"
-        st.markdown(
-            f'<div class="status-pill {cls2}"><span class="status-dot {cls2}"></span>{label2}</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("⚙️ Behavior", expanded=st.session_state.exp_behavior):
+        settings["auto_scroll"] = st.toggle("Auto-scroll to bottom", value=settings.get("auto_scroll", True))
+        settings["show_sources"] = st.toggle("Show sources below answers", value=settings.get("show_sources", True))
 
     # ── Actions ─────────────────────────────────────────────────────────
     st.markdown('<div class="sb-section">', unsafe_allow_html=True)
@@ -1205,13 +1739,14 @@ if not st.session_state.messages:
 # Render messages
 for i, msg in enumerate(st.session_state.messages):
     if msg["role"] == "user":
+        user_text = html_text(msg.get("content", ""))
         st.markdown(
             f"""
         <div class="msg-row user">
             <div class="msg-avatar user-av">YOU</div>
             <div class="msg-body">
                 <div class="msg-label">You</div>
-                <div class="user-bubble">{msg["content"]}</div>
+                <div class="user-bubble">{user_text}</div>
             </div>
         </div>
         """,
@@ -1220,18 +1755,24 @@ for i, msg in enumerate(st.session_state.messages):
 
     else:
         provider_label = "OLLAMA" if msg.get("provider") == "ollama" else "GROQ"
-        backend = msg.get("backend", "")
-        backend_str = f" · via {backend}" if backend and backend != "none" else ""
+        backend = (msg.get("backend", "") or "").strip()
+        backend_safe = escape(backend)
+        backend_str = f" · via {backend_safe}" if backend and backend != "none" else ""
 
         results_html = ""
-        if msg.get("results"):
+        if msg.get("results") and settings.get("show_sources", True):
             results_html = '<div class="results-wrap"><div class="results-label">Sources</div>'
             for j, r in enumerate(msg["results"], 1):
-                title = r.get("title", "No title")
-                url = r.get("url", "")
-                snippet = r.get("snippet", "")
-                source = r.get("source", "")
-                link = f'<a class="result-title" href="{url}" target="_blank" rel="noopener">{title}</a>' if url else f'<div class="result-title">{title}</div>'
+                title = html_text(r.get("title", "No title"))
+                url = normalize_result_url(r.get("url", ""))
+                snippet = html_text(r.get("snippet", ""))
+                source = html_text(r.get("source", ""))
+                safe_url = escape(url, quote=True)
+                link = (
+                    f'<a class="result-title" href="{safe_url}" target="_blank" rel="noopener noreferrer">{title}</a>'
+                    if safe_url
+                    else f'<div class="result-title">{title}</div>'
+                )
                 results_html += f"""
                 <div class="result-item">
                     <div class="result-num">{j:02d}</div>
@@ -1243,7 +1784,7 @@ for i, msg in enumerate(st.session_state.messages):
                 </div>"""
             results_html += "</div>"
 
-        summary = msg.get("ai_summary", "")
+        summary = html_text(msg.get("ai_summary", ""))
 
         st.markdown(
             f"""
@@ -1272,22 +1813,61 @@ st.markdown("</div>", unsafe_allow_html=True)  # main-wrap
 if prompt := st.chat_input("Search the web... e.g. 'Latest news about Claude AI'"):
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    with st.spinner("Searching..."):
-        results, backend = search_web(prompt, settings["search_server"], settings["max_results"])
+    with st.spinner("Searching and synthesizing..."):
+        response_char_limit = get_response_char_limit(settings.get("max_response_length", "Medium"))
+        results, backend = search_web(
+            prompt,
+            settings["search_server"],
+            settings["max_results"],
+            timeout_s=int(settings.get("search_timeout_s", 20)),
+            all_endpoint_limit=int(settings.get("search_all_endpoint_limit", 3)),
+        )
 
-    if results:
-        with st.spinner("Synthesizing results..."):
+        if results:
             summary = None
             if settings["provider"] == "ollama":
-                summary = ai_summarize_ollama(prompt, results, settings["ollama_model"], settings["ollama_url"])
+                ollama_num_predict = int(settings.get("ollama_num_predict", 0))
+                context_results_limit = int(settings.get("context_results_limit", 0))
+                context_snippet_chars = int(settings.get("context_snippet_chars", 0))
+                ollama_context_length = int(settings.get("ollama_context_length", 0))
+                ollama_timeout_s = int(settings.get("ollama_timeout_s", 0))
+                summary = ai_summarize_ollama(
+                    prompt,
+                    results,
+                    settings["ollama_model"],
+                    settings["ollama_url"],
+                    mode=settings.get("response_mode", "Balanced"),
+                    temperature=settings.get("temperature", 0.2),
+                    num_predict_override=ollama_num_predict if ollama_num_predict > 0 else None,
+                    context_items_override=context_results_limit if context_results_limit > 0 else None,
+                    context_snippet_chars=context_snippet_chars if context_snippet_chars > 0 else None,
+                    context_length_override=ollama_context_length if ollama_context_length > 0 else None,
+                    top_p=float(settings.get("ollama_top_p", 0.9)),
+                    keep_alive=settings.get("ollama_keep_alive", "20m"),
+                    timeout_s_override=ollama_timeout_s if ollama_timeout_s > 0 else None,
+                    response_char_limit=response_char_limit,
+                )
             else:
-                summary = ai_summarize_groq(prompt, results, settings["groq_model"])
+                groq_max_tokens = int(settings.get("groq_max_tokens", 0))
+                context_results_limit = int(settings.get("context_results_limit", 0))
+                context_snippet_chars = int(settings.get("context_snippet_chars", 0))
+                summary = ai_summarize_groq(
+                    prompt,
+                    results,
+                    settings["groq_model"],
+                    mode=settings.get("response_mode", "Balanced"),
+                    temperature=settings.get("temperature", 0.2),
+                    max_tokens_override=groq_max_tokens if groq_max_tokens > 0 else None,
+                    context_items_override=context_results_limit if context_results_limit > 0 else None,
+                    context_snippet_chars=context_snippet_chars if context_snippet_chars > 0 else None,
+                    response_char_limit=response_char_limit,
+                )
 
-        if not summary:
-            summary = f"Found {len(results)} results but the AI couldn't respond. Check your {settings['provider']} settings."
-    else:
-        summary = "No results found. Try a different query or check if the search server is running."
-        results = []
+            if not summary:
+                summary = f"Found {len(results)} results but the AI couldn't respond. Check your {settings['provider']} settings."
+        else:
+            summary = "No results found. Try a different query or check if the search server is running."
+            results = []
 
     st.session_state.messages.append(
         {
