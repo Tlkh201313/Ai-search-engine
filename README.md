@@ -4,6 +4,8 @@ Unlimited local AI web search server.
 Rotates across 6+ backends. No API keys. Circuit-breaker protected.
 Designed for AI models (Qwen, LLaMA, Mistral, etc.)
 
+> **Warning:** This project is under active development. There are still a few bugs and things may not work perfectly yet. Use at your own risk.
+
 ## Quick start
 
 ```bash
