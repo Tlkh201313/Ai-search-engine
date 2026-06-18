@@ -126,7 +126,23 @@ def register(name: str, weight: float = 1.0):
     return decorator
 
 
+STRATEGY_ALIASES = {
+    "rr": "round_robin",
+    "round_robin": "round_robin",
+    "lru": "lru",
+    "random": "random",
+    "rand": "random",
+    "weighted": "weighted",
+    "wrr": "weighted",
+}
+
+
+def normalize_strategy(strategy: str) -> str:
+    return STRATEGY_ALIASES.get((strategy or "").lower().strip(), "lru")
+
+
 def pick(strategy: str = "lru", exclude: list = None) -> Optional[str]:
+    strategy = normalize_strategy(strategy)
     if exclude is None:
         exclude = []
     pool = {k: v for k, v in REGISTRY.items() if k not in exclude}
@@ -148,7 +164,15 @@ def pick(strategy: str = "lru", exclude: list = None) -> Optional[str]:
     return min(available, key=lambda k: METRICS[k].last_used if k in METRICS else 0)
 
 
+def mark_attempt(name: str):
+    """Record that a backend is about to be called (drives LRU/round-robin
+    fairness) without touching its circuit-breaker state."""
+    if name in METRICS:
+        METRICS[name].last_used = time.time()
+
+
 def mark_used(name: str):
+    """Record a *successful* use: bump the counter and close the circuit."""
     if name in METRICS:
         METRICS[name].uses += 1
         METRICS[name].last_used = time.time()
@@ -173,6 +197,7 @@ def get_stats() -> dict:
     for name in REGISTRY:
         cb = CIRCUITS.get(name, CircuitBreaker())
         m = METRICS.get(name, BackendMetrics())
+        p50, p95, p99 = m.p50(), m.p95(), m.p99()
         result[name] = {
             "uses": m.uses,
             "fails": m.fails,
@@ -182,19 +207,18 @@ def get_stats() -> dict:
             "consecutive_failures": cb.consecutive_failures,
             "backoff_delay": round(cb.backoff_delay, 2),
             "success_rate": round(m.success_rate(), 3),
-            "latency_p50": round(cb.backoff_delay, 2)
-            if cb.state != CircuitState.CLOSED
-            else (round(m.p50(), 1) if m.p50() else None),
-            "latency_p95": round(m.p95(), 1) if m.p95() else None,
-            "latency_p99": round(m.p99(), 1) if m.p99() else None,
+            "latency_p50": round(p50, 1) if p50 is not None else None,
+            "latency_p95": round(p95, 1) if p95 is not None else None,
+            "latency_p99": round(p99, 1) if p99 is not None else None,
         }
-        if cb.state == CircuitState.CLOSED and m.p50() is not None:
-            result[name]["latency_p50"] = round(m.p50(), 1)
     return result
 
 
 def get_circuit_states() -> dict[str, str]:
     return {name: CIRCUITS[name].state.value for name in CIRCUITS}
+
+
+REQUEST_TIMEOUT = 12
 
 
 async def run_with_fallback(
@@ -207,32 +231,26 @@ async def run_with_fallback(
         while len(tried) < len(REGISTRY):
             name = pick(strategy, exclude=tried)
             if not name:
-                for skipped_name in [k for k in REGISTRY if k not in tried]:
-                    cb = CIRCUITS.get(skipped_name)
-                    if cb and cb.state == CircuitState.OPEN:
-                        tried.append(skipped_name)
+                # No executable backend remains. Anything still untried is in
+                # cooldown — record it as tried so the caller sees the full set.
+                for skipped in [k for k in REGISTRY if k not in tried]:
+                    tried.append(skipped)
                 break
             tried.append(name)
-            cb = CIRCUITS.get(name)
-            if cb and not cb.can_execute():
-                continue
             start = time.monotonic()
-            mark_used(name)
+            mark_attempt(name)
             try:
                 results = await asyncio.wait_for(
-                    REGISTRY[name]["fn"](query, max_results, client), timeout=12
+                    REGISTRY[name]["fn"](query, max_results, client),
+                    timeout=REQUEST_TIMEOUT,
                 )
-                elapsed_ms = (time.monotonic() - start) * 1000
-                record_latency(name, elapsed_ms)
-                if results:
-                    return {"results": results, "backend_used": name, "tried": tried}
-                mark_failed(name)
-            except asyncio.TimeoutError:
-                elapsed_ms = (time.monotonic() - start) * 1000
-                record_latency(name, elapsed_ms)
-                mark_failed(name)
             except Exception:
-                elapsed_ms = (time.monotonic() - start) * 1000
-                record_latency(name, elapsed_ms)
+                record_latency(name, (time.monotonic() - start) * 1000)
                 mark_failed(name)
+                continue
+            record_latency(name, (time.monotonic() - start) * 1000)
+            if results:
+                mark_used(name)
+                return {"results": results, "backend_used": name, "tried": tried}
+            mark_failed(name)
     return {"results": [], "error": "All backends exhausted", "tried": tried}
