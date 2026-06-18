@@ -10,7 +10,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+from core.config import CFG
+
+OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or CFG.get(
+    "observability", {}
+).get("otel_endpoint", "")
 USE_OTEL = bool(OTEL_ENDPOINT)
 
 

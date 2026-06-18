@@ -5,7 +5,7 @@ Toggle in settings.toml: [reranker] enabled = true
 """
 
 import os
-import json
+import asyncio
 import httpx
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
@@ -65,6 +65,3 @@ async def rerank(query: str, results: list, model: str = DEFAULT_MODEL) -> list:
 
     scored.sort(key=lambda x: x["relevance_score"], reverse=True)
     return scored
-
-
-import asyncio

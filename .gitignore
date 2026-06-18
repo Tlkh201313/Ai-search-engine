@@ -18,8 +18,11 @@ htmlcov/
 # Environment files
 .env
 
-# Local runtime cache
-cache/
+# Local runtime cache DB (keep the cache/ source package itself)
+cache/*.db
+cache/*.db-shm
+cache/*.db-wal
+cache/search.db*
 
 # OS/editor files
 .DS_Store
