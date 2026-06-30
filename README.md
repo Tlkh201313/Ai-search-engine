@@ -110,12 +110,24 @@ Then open http://localhost:8501
 
 
 {
+  "$schema": "https://opencode.ai/config.json",
   "provider": {
     "brave-leo": {
+      "name": "Brave Leo",
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "https://homelander.ca/v1",
         "apiKey": "dummy"
+      },
+      "models": {
+        "claude-opus": { "name": "Claude Opus 4.8" },
+        "claude-4-sonnet": { "name": "Claude 4 Sonnet" },
+        "claude-3-haiku": { "name": "Claude 3 Haiku" },
+        "mistral-large": { "name": "Mistral Large" },
+        "llama-4-maverick": { "name": "Llama 4 Maverick" },
+        "deepseek-v3-2": { "name": "DeepSeek V3.2" },
+        "kimi-k2-5": { "name": "Kimi K2.5" },
+        "qwen-3-coder-480b": { "name": "Qwen 3 Coder 480B" }
       }
     }
   }
