@@ -105,3 +105,18 @@ Then open http://localhost:8501
 |----------|------|-------|
 | **Ollama** (default) | Free | Install Ollama, pull a model (`ollama pull qwen2.5`) |
 | **Groq** | Free tier | Add API keys in settings (supports multiple keys with auto-rotation) |
+
+
+
+
+{
+  "provider": {
+    "brave-leo": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://homelander.ca/v1",
+        "apiKey": "dummy"
+      }
+    }
+  }
+}
