@@ -3,7 +3,6 @@ import type {
   ProgressEvent,
   ResearchMode,
   ResearchResult,
-  Source,
 } from './types';
 
 export const API_BASE = (
@@ -55,21 +54,8 @@ export async function getResearch(id: string): Promise<ResearchResult> {
   return json(await fetch(`${API_BASE}/api/research/${id}`));
 }
 
-export async function getSources(id: string): Promise<Source[]> {
-  return json(await fetch(`${API_BASE}/api/sources?research_id=${id}`));
-}
-
 export async function getSettings(): Promise<AppSettings> {
   return json(await fetch(`${API_BASE}/api/settings`));
-}
-
-export async function checkHealth(): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
-    return res.ok;
-  } catch {
-    return false;
-  }
 }
 
 export interface StreamHandlers {

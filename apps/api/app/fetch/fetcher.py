@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urljoin
 
 import httpx
 
@@ -20,6 +21,8 @@ from app.textutil import domain_of
 log = get_logger("fetch")
 
 _MAX_RETRIES = 2
+_MAX_REDIRECTS = 4
+_MAX_BYTES = 2_500_000  # cap a single page download at ~2.5 MB
 
 
 @dataclass
@@ -62,7 +65,8 @@ async def fetch_page(
 
     owns_client = client is None
     if owns_client:
-        client = httpx.AsyncClient(follow_redirects=True, timeout=settings.fetch_timeout)
+        # Redirects are followed manually so every hop is SSRF-validated.
+        client = httpx.AsyncClient(follow_redirects=False, timeout=settings.fetch_timeout)
     try:
         page = await _fetch_with_retries(safe_url, client, max_chars)
     finally:
@@ -80,20 +84,59 @@ async def _fetch_with_retries(
     last_error = "unknown error"
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            resp = await client.get(url, headers=default_headers())
-            content_type = resp.headers.get("content-type", "")
+            page = await _download(url, client, max_chars)
+        except UnsafeURLError as exc:
+            return FetchedPage(url=url, ok=False, error=f"blocked redirect: {exc}")
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_error = str(exc)
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(0.5 * (2**attempt))
+                continue
+            break
+        except Exception as exc:  # pragma: no cover - defensive
+            last_error = str(exc)
+            break
+        # Retry only transient server-side statuses.
+        if not page.ok and page.status in (429, 500, 502, 503) and attempt < _MAX_RETRIES:
+            last_error = page.error or f"HTTP {page.status}"
+            await asyncio.sleep(0.5 * (2**attempt))
+            continue
+        return page
+    return FetchedPage(url=url, ok=False, error=last_error)
+
+
+async def _download(url: str, client: httpx.AsyncClient, max_chars: int) -> FetchedPage:
+    """Single fetch with manual, SSRF-validated redirects and a byte cap."""
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        async with client.stream("GET", current, headers=default_headers()) as resp:
+            if resp.is_redirect:
+                location = resp.headers.get("location")
+                if not location:
+                    return FetchedPage(
+                        url=current, ok=False, status=resp.status_code,
+                        error="redirect without location",
+                    )
+                current = validate_url(urljoin(current, location))  # may raise UnsafeURLError
+                continue
             if resp.status_code >= 400:
-                last_error = f"HTTP {resp.status_code}"
-                if resp.status_code in (429, 500, 502, 503) and attempt < _MAX_RETRIES:
-                    await asyncio.sleep(0.5 * (2**attempt))
-                    continue
-                return FetchedPage(url=url, ok=False, status=resp.status_code, error=last_error)
+                return FetchedPage(
+                    url=current, ok=False, status=resp.status_code,
+                    error=f"HTTP {resp.status_code}",
+                )
+            content_type = resp.headers.get("content-type", "")
             if "html" not in content_type and "text" not in content_type:
                 return FetchedPage(
-                    url=url, ok=False, status=resp.status_code,
+                    url=current, ok=False, status=resp.status_code,
                     error=f"unsupported content-type: {content_type}",
                 )
-            data = extract(resp.text, url, max_chars)
+            raw = bytearray()
+            async for chunk in resp.aiter_bytes():
+                raw += chunk
+                if len(raw) >= _MAX_BYTES:
+                    break
+            text = raw.decode(resp.encoding or "utf-8", errors="replace")
+            data = extract(text, str(resp.url), max_chars)
             return FetchedPage(
                 url=str(resp.url),
                 ok=bool(data.text),
@@ -108,15 +151,7 @@ async def _fetch_with_retries(
                 word_count=len(data.text.split()),
                 error=None if data.text else "no readable text",
             )
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            last_error = str(exc)
-            if attempt < _MAX_RETRIES:
-                await asyncio.sleep(0.5 * (2**attempt))
-                continue
-        except Exception as exc:  # pragma: no cover - defensive
-            last_error = str(exc)
-            break
-    return FetchedPage(url=url, ok=False, error=last_error)
+    return FetchedPage(url=url, ok=False, status=0, error="too many redirects")
 
 
 async def fetch_many(
@@ -125,7 +160,7 @@ async def fetch_many(
     """Fetch many pages concurrently, bounded by a semaphore."""
     concurrency = concurrency or settings.fetch_concurrency
     sem = asyncio.Semaphore(concurrency)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=settings.fetch_timeout) as client:
+    async with httpx.AsyncClient(follow_redirects=False, timeout=settings.fetch_timeout) as client:
 
         async def _one(u: str) -> FetchedPage:
             async with sem:
