@@ -1,26 +1,35 @@
-# Python cache
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
 .venv/
 venv/
 env/
-
-# Testing and tooling cache
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 .coverage
 htmlcov/
+apps/api/data/
+*.db
 
-# Environment files
+# --- Node / Next ---
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+apps/web/next-env.d.ts
+
+# --- Env / secrets ---
 .env
+.env.local
+.env.*.local
 
-# Local runtime cache
-cache/
-
-# OS/editor files
+# --- OS / editor ---
 .DS_Store
 Thumbs.db
+*.log
+.idea/
+.vscode/
