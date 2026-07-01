@@ -56,11 +56,29 @@ function advanceStages(
   return next;
 }
 
+function restoredState(result: ResearchResult): ResearchState {
+  return {
+    ...initialState(),
+    status: result.status === 'error' ? 'error' : 'complete',
+    stage: 'done',
+    progress: 1,
+    sources: result.sources ?? [],
+    result,
+    answerText: result.answer?.detail ?? '',
+    error: result.error,
+    chat: (result.sources ?? []).length === 0,
+    stageStatus: Object.fromEntries(STAGE_ORDER.map((st) => [st, 'done'])),
+  };
+}
+
 export function useResearch(
   id: string,
-  opts: { live: boolean; query: string; mode: ResearchMode },
+  opts: { live: boolean; query: string; mode: ResearchMode; saved?: ResearchResult },
 ): ResearchState {
-  const [state, setState] = useState<ResearchState>(initialState);
+  const [state, setState] = useState<ResearchState>(() =>
+    opts.saved ? restoredState(opts.saved) : initialState(),
+  );
+  const savedRef = useRef(!!opts.saved);
   // Streaming deltas are buffered and flushed on a timer: re-rendering the
   // markdown tree per token is the main UI cost while an answer streams.
   const deltaBufRef = useRef('');
@@ -72,6 +90,7 @@ export function useResearch(
   // closes the stream, so the re-run has to open a fresh one (the backend
   // replays buffered events, so re-attaching is lossless).
   useEffect(() => {
+    if (savedRef.current) return; // restored from the local archive — nothing to fetch
     let cancelled = false;
     let close: (() => void) | undefined;
 

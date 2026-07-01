@@ -4,7 +4,7 @@ import { AlertCircle, AlignLeft, RotateCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { useResearch, type ResearchState } from '@/hooks/useResearch';
-import type { ResearchMode, Source } from '@/lib/types';
+import type { ResearchMode, ResearchResult, Source } from '@/lib/types';
 import { cn, faviconFor } from '@/lib/utils';
 
 import { AnswerView } from './AnswerView';
@@ -17,6 +17,8 @@ export interface TurnData {
   query: string;
   mode: ResearchMode;
   live: boolean;
+  /** Result restored from the local thread archive (skips all fetching). */
+  saved?: ResearchResult;
 }
 
 interface Props {
@@ -72,6 +74,7 @@ export function Turn({ turn, onState, onFollowUp }: Props) {
     live: turn.live,
     query: turn.query,
     mode: turn.mode,
+    saved: turn.saved,
   });
   const [tab, setTab] = useState<'answer' | 'sources'>('answer');
   const [highlightId, setHighlightId] = useState<number | null>(null);
@@ -115,9 +118,18 @@ export function Turn({ turn, onState, onFollowUp }: Props) {
 
   return (
     <article className="border-b border-line/70 pb-10 last:border-0">
-      <h2 className="mb-4 text-[1.65rem] font-medium leading-snug tracking-tight text-ink animate-slide-up">
-        {query}
-      </h2>
+      {chat && !failed ? (
+        // Chat turn: the question reads as a message bubble, like a conversation.
+        <div className="mb-6 flex justify-end animate-slide-up">
+          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-4 py-2.5 text-[15px] leading-relaxed text-ink shadow-subtle">
+            {query}
+          </div>
+        </div>
+      ) : (
+        <h2 className="mb-4 text-[1.65rem] font-medium leading-snug tracking-tight text-ink animate-slide-up">
+          {query}
+        </h2>
+      )}
 
       {failed ? (
         <div className="flex items-start gap-3 rounded-xl border border-red-500/25 bg-red-500/5 p-4">

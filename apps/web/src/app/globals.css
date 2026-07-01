@@ -57,6 +57,25 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Soft ambient glow so large surfaces don't read flat */
+.ambient {
+  position: relative;
+}
+.ambient::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(42rem 26rem at 78% -8%, rgb(var(--accent) / 0.07), transparent 60%),
+    radial-gradient(30rem 20rem at 12% 110%, rgb(var(--accent) / 0.05), transparent 60%);
+}
+.ambient > * {
+  position: relative;
+  z-index: 1;
+}
+
 ::selection {
   background: rgb(var(--accent) / 0.22);
 }
@@ -97,11 +116,11 @@ body {
   }
 }
 
-/* Readable answer typography */
+/* Readable answer typography — calm serif reading, like a well-set article */
 .answer-prose {
-  font-family: var(--font-sans);
-  font-size: 1rem;
-  line-height: 1.75;
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  line-height: 1.8;
   color: rgb(var(--ink));
 }
 .answer-prose p {

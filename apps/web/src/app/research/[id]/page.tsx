@@ -9,7 +9,8 @@ import type { ResearchState } from '@/hooks/useResearch';
 import { ApiError, createResearch, type ConversationTurn } from '@/lib/api';
 import { addRecent, takePending } from '@/lib/history';
 import { DEFAULT_PERSONA } from '@/lib/personas';
-import type { Persona, ResearchMode } from '@/lib/types';
+import { loadThread, saveThread, type SavedTurn } from '@/lib/threads';
+import type { Persona, ResearchMode, ResearchResult } from '@/lib/types';
 
 interface TurnSummary {
   status: ResearchState['status'];
@@ -35,6 +36,7 @@ export default function ResearchPage() {
   summariesRef.current = summaries;
   const personaRef = useRef(persona);
   personaRef.current = persona;
+  const resultsRef = useRef<Map<string, ResearchResult>>(new Map());
 
   useEffect(() => {
     const pending = takePending(id);
@@ -42,6 +44,18 @@ export default function ResearchPage() {
     // consume-once — never clobber an already-initialized thread for this id.
     setTurns((prev) => {
       if (prev.some((t) => t.id === id)) return prev;
+      // Reopened from the Library: restore the archived conversation instantly.
+      const saved = loadThread(id);
+      if (saved && !pending) {
+        saved.forEach((t) => resultsRef.current.set(t.id, t.result));
+        return saved.map((t) => ({
+          id: t.id,
+          query: t.query,
+          mode: t.mode,
+          live: false,
+          saved: t.result,
+        }));
+      }
       return [
         pending
           ? { id, query: pending.query, mode: pending.mode, live: true }
@@ -54,17 +68,35 @@ export default function ResearchPage() {
     }
   }, [id]);
 
-  const handleState = useCallback((turnId: string, state: ResearchState) => {
-    setSummaries((prev) => {
-      const existing = prev[turnId];
-      const answer = state.result?.answer?.summary || state.result?.answer?.detail || '';
-      const query = state.result?.query ?? existing?.query ?? '';
-      if (existing && existing.status === state.status && existing.answer === answer) {
-        return prev;
+  const archive = useCallback(() => {
+    const saved: SavedTurn[] = [];
+    for (const t of turnsRef.current) {
+      const result = resultsRef.current.get(t.id);
+      if (result && result.status !== 'error') {
+        saved.push({ id: t.id, query: result.query || t.query, mode: t.mode, result });
       }
-      return { ...prev, [turnId]: { status: state.status, query, answer } };
-    });
-  }, []);
+    }
+    saveThread(id, saved);
+  }, [id]);
+
+  const handleState = useCallback(
+    (turnId: string, state: ResearchState) => {
+      if (state.result && state.status === 'complete' && !resultsRef.current.has(turnId)) {
+        resultsRef.current.set(turnId, state.result);
+        archive();
+      }
+      setSummaries((prev) => {
+        const existing = prev[turnId];
+        const answer = state.result?.answer?.summary || state.result?.answer?.detail || '';
+        const query = state.result?.query ?? existing?.query ?? '';
+        if (existing && existing.status === state.status && existing.answer === answer) {
+          return prev;
+        }
+        return { ...prev, [turnId]: { status: state.status, query, answer } };
+      });
+    },
+    [archive],
+  );
 
   const handleFollowUp = useCallback(
     async (query: string, m: ResearchMode, p?: Persona) => {
@@ -80,7 +112,7 @@ export default function ResearchPage() {
         .filter((c) => c.query && c.answer);
       try {
         const { id: newId } = await createResearch(query, m, chosen, context);
-        addRecent({ id: newId, query, mode: m, ts: Date.now() });
+        addRecent({ id: newId, query, mode: m, ts: Date.now(), threadId: id });
         setTurns((prev) => [...prev, { id: newId, query, mode: m, live: true }]);
         setMode(m);
         setPersona(chosen);
@@ -96,7 +128,7 @@ export default function ResearchPage() {
         setBusy(false);
       }
     },
-    [],
+    [id],
   );
 
   return (

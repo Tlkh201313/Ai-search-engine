@@ -4,11 +4,14 @@ import {
   Check,
   CircleAlert,
   Copy,
+  Download,
   GitCompareArrows,
   Link2,
   Plus,
   RotateCw,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -51,19 +54,40 @@ function answerToText(answer: Answer, sources: Source[]): string {
   return lines.join('\n').trim();
 }
 
-function CopyButton({
+function IconAction({
   label,
   icon: Icon,
-  getText,
+  onClick,
+  active = false,
 }: {
   label: string;
   icon: React.ElementType;
-  getText: () => string;
+  onClick: () => void;
+  active?: boolean;
 }) {
-  const [done, setDone] = useState(false);
   return (
     <button
       type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={cn(
+        'flex h-8 w-8 items-center justify-center rounded-lg transition-all hover:bg-ink/5 active:scale-90',
+        active ? 'text-accent' : 'text-faint hover:text-ink',
+      )}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+  );
+}
+
+function CopyAction({ label, icon, getText }: { label: string; icon: React.ElementType; getText: () => string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <IconAction
+      label={done ? 'Copied' : label}
+      icon={done ? Check : icon}
+      active={done}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(getText());
@@ -73,42 +97,52 @@ function CopyButton({
           /* clipboard unavailable */
         }
       }}
-      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition-colors hover:bg-ink/5 hover:text-ink"
-    >
-      {done ? <Check className="h-3.5 w-3.5 text-accent" /> : <Icon className="h-3.5 w-3.5" />}
-      {done ? 'Copied' : label}
-    </button>
+    />
   );
+}
+
+function downloadMarkdown(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function useFeedback(id: string): ['up' | 'down' | null, (v: 'up' | 'down') => void] {
+  const [fb, setFb] = useState<'up' | 'down' | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return localStorage.getItem(`are:fb:${id}`) as 'up' | 'down' | null;
+    } catch {
+      return null;
+    }
+  });
+  const vote = (v: 'up' | 'down') => {
+    const next = fb === v ? null : v;
+    setFb(next);
+    try {
+      if (next) localStorage.setItem(`are:fb:${id}`, next);
+      else localStorage.removeItem(`are:fb:${id}`);
+    } catch {
+      /* ignore */
+    }
+  };
+  return [fb, vote];
 }
 
 export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
   const { result, sources, answerText, status } = state;
   const answer = result?.answer;
   const streaming = status === 'running';
+  const [fb, vote] = useFeedback(result?.id ?? '');
 
   const conf = confidenceLabel(result?.confidence ?? 0);
 
   return (
     <div className="animate-fade-in">
-      {/* Actions */}
-      {answer && result && (
-        <div className="mb-3 flex items-center gap-1">
-          <CopyButton label="Copy" icon={Copy} getText={() => answerToText(answer, sources)} />
-          <CopyButton
-            label="Share"
-            icon={Link2}
-            getText={() => (typeof window !== 'undefined' ? window.location.href : '')}
-          />
-          <button
-            type="button"
-            onClick={() => onFollowUp(result.query, mode)}
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition-colors hover:bg-ink/5 hover:text-ink"
-          >
-            <RotateCw className="h-3.5 w-3.5" />
-            Rewrite
-          </button>
-        </div>
-      )}
 
       {/* Direct answer */}
       {answer?.summary && (
@@ -192,26 +226,58 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
             </section>
           )}
 
-          {/* Meta footer */}
+          {/* Action bar + meta */}
           {result && (
-            <div className="mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-4 text-xs text-faint">
-              <span className={cn('font-medium', conf.tone)}>{conf.label}</span>
-              {sources.length > 0 && (
-                <>
-                  <span>·</span>
-                  <span>{sources.length} sources</span>
-                </>
-              )}
-              {result.timings.total_ms > 0 && (
-                <>
-                  <span>·</span>
-                  <span>{formatMs(result.timings.total_ms)}</span>
-                </>
-              )}
-              <span>·</span>
-              <span>
-                {result.model.grounded ? result.model.model : 'extractive mode'}
-              </span>
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5">
+              <div className="flex items-center gap-0.5">
+                <CopyAction
+                  label="Copy link"
+                  icon={Link2}
+                  getText={() => (typeof window !== 'undefined' ? window.location.href : '')}
+                />
+                <IconAction
+                  label="Export markdown"
+                  icon={Download}
+                  onClick={() =>
+                    downloadMarkdown(
+                      `lumen-${result.id}.md`,
+                      `# ${result.query}\n\n${answerToText(answer, sources)}`,
+                    )
+                  }
+                />
+                <CopyAction label="Copy answer" icon={Copy} getText={() => answerToText(answer, sources)} />
+                <IconAction label="Rewrite" icon={RotateCw} onClick={() => onFollowUp(result.query, mode)} />
+                <span className="mx-1.5 h-4 w-px bg-line" />
+                <IconAction
+                  label="Good answer"
+                  icon={ThumbsUp}
+                  active={fb === 'up'}
+                  onClick={() => vote('up')}
+                />
+                <IconAction
+                  label="Not helpful"
+                  icon={ThumbsDown}
+                  active={fb === 'down'}
+                  onClick={() => vote('down')}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint">
+                <span className={cn('font-medium', conf.tone)}>{conf.label}</span>
+                {sources.length > 0 && (
+                  <>
+                    <span>·</span>
+                    <span>{sources.length} sources</span>
+                  </>
+                )}
+                {result.timings.total_ms > 0 && (
+                  <>
+                    <span>·</span>
+                    <span>{formatMs(result.timings.total_ms)}</span>
+                  </>
+                )}
+                <span>·</span>
+                <span>{result.model.grounded ? result.model.model : 'extractive mode'}</span>
+              </div>
             </div>
           )}
 

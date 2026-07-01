@@ -14,6 +14,7 @@ import {
   type RecentSearch,
 } from '@/lib/history';
 import { DEFAULT_PERSONA } from '@/lib/personas';
+import { loadThread } from '@/lib/threads';
 import { cn } from '@/lib/utils';
 
 import { Brand, Logo } from './Brand';
@@ -32,12 +33,18 @@ export function Sidebar() {
     return () => window.removeEventListener(RECENT_EVENT, refresh);
   }, [pathname]);
 
-  const rerun = async (r: RecentSearch) => {
+  const open = async (r: RecentSearch) => {
     setError(null);
+    // Saved thread: reopen it instantly from the local archive.
+    if (r.threadId && loadThread(r.threadId)) {
+      router.push(`/research/${r.threadId}`);
+      return;
+    }
+    // No archive (old entry / cleared storage): re-run the query.
     try {
       const { id } = await createResearch(r.query, r.mode, DEFAULT_PERSONA);
       setPending(id, { query: r.query, mode: r.mode, persona: DEFAULT_PERSONA });
-      addRecent({ id, query: r.query, mode: r.mode, ts: Date.now() });
+      addRecent({ id, query: r.query, mode: r.mode, ts: Date.now(), threadId: id });
       router.push(`/research/${id}`);
     } catch {
       setError("Can't reach the API — is the backend running?");
@@ -106,7 +113,7 @@ export function Sidebar() {
               <button
                 key={r.id}
                 type="button"
-                onClick={() => rerun(r)}
+                onClick={() => open(r)}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-muted transition-colors hover:bg-ink/5 hover:text-ink"
               >
                 <Clock className="h-3.5 w-3.5 shrink-0 text-faint" />

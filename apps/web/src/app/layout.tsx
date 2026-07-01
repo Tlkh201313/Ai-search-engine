@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-dvh antialiased">
         <Providers>
-          <div className="flex min-h-dvh flex-col md:flex-row">
+          <div className="ambient flex min-h-dvh flex-col md:flex-row">
             <Sidebar />
             <main className="min-w-0 flex-1">{children}</main>
           </div>

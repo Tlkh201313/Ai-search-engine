@@ -12,6 +12,8 @@ export interface RecentSearch {
   query: string;
   mode: ResearchMode;
   ts: number;
+  /** Thread (page) id this query belongs to — used to reopen the saved thread. */
+  threadId?: string;
 }
 
 export function getRecent(): RecentSearch[] {
