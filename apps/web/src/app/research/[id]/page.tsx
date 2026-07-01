@@ -38,11 +38,16 @@ export default function ResearchPage() {
 
   useEffect(() => {
     const pending = takePending(id);
-    setTurns([
-      pending
-        ? { id, query: pending.query, mode: pending.mode, live: true }
-        : { id, query: '', mode: 'quick', live: false },
-    ]);
+    // Functional update: StrictMode re-runs this effect and takePending is
+    // consume-once — never clobber an already-initialized thread for this id.
+    setTurns((prev) => {
+      if (prev.some((t) => t.id === id)) return prev;
+      return [
+        pending
+          ? { id, query: pending.query, mode: pending.mode, live: true }
+          : { id, query: '', mode: 'quick', live: false },
+      ];
+    });
     if (pending) {
       setMode(pending.mode);
       setPersona(pending.persona);

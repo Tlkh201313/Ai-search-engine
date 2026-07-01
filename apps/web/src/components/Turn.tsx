@@ -30,13 +30,14 @@ function SourceStrip({ sources, onMore }: { sources: Source[]; onMore: () => voi
   const extra = sources.length - shown.length;
   return (
     <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {shown.map((s) => (
+      {shown.map((s, i) => (
         <a
           key={s.id}
           href={s.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex flex-col justify-between gap-1.5 rounded-lg bg-raised p-2.5 transition-colors hover:bg-ink/10"
+          style={{ animationDelay: `${i * 60}ms` }}
+          className="flex flex-col justify-between gap-1.5 rounded-lg bg-raised p-2.5 transition-all animate-slide-up hover:-translate-y-0.5 hover:bg-ink/10 hover:shadow-card"
         >
           <span className="line-clamp-2 text-xs leading-snug text-ink">{s.title}</span>
           <span className="flex items-center gap-1.5 text-[11px] text-faint">
@@ -114,7 +115,7 @@ export function Turn({ turn, onState, onFollowUp }: Props) {
 
   return (
     <article className="border-b border-line/70 pb-10 last:border-0">
-      <h2 className="mb-4 text-[1.65rem] font-medium leading-snug tracking-tight text-ink">
+      <h2 className="mb-4 text-[1.65rem] font-medium leading-snug tracking-tight text-ink animate-slide-up">
         {query}
       </h2>
 
@@ -183,13 +184,14 @@ export function Turn({ turn, onState, onFollowUp }: Props) {
             </>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
-              {sources.map((s) => (
-                <SourceCard
-                  key={s.id}
-                  source={s}
-                  highlighted={highlightId === s.id}
-                  anchorPrefix={`t${turn.id}`}
-                />
+              {sources.map((s, i) => (
+                <div key={s.id} className="animate-slide-up" style={{ animationDelay: `${Math.min(i, 8) * 50}ms` }}>
+                  <SourceCard
+                    source={s}
+                    highlighted={highlightId === s.id}
+                    anchorPrefix={`t${turn.id}`}
+                  />
+                </div>
               ))}
             </div>
           )}

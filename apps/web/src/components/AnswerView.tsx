@@ -224,7 +224,8 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
                     key={i}
                     type="button"
                     onClick={() => onFollowUp(q, mode)}
-                    className="group flex items-center justify-between gap-3 py-3 text-left text-[15px] font-medium text-ink transition-colors hover:text-accent"
+                    style={{ animationDelay: `${i * 70}ms` }}
+                    className="group flex items-center justify-between gap-3 py-3 text-left text-[15px] font-medium text-ink transition-colors animate-slide-up hover:text-accent"
                   >
                     <span>{q}</span>
                     <Plus className="h-4 w-4 shrink-0 text-faint transition-colors group-hover:text-accent" />

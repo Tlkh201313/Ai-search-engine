@@ -6,7 +6,13 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import { createResearch } from '@/lib/api';
-import { addRecent, getRecent, setPending, type RecentSearch } from '@/lib/history';
+import {
+  addRecent,
+  getRecent,
+  RECENT_EVENT,
+  setPending,
+  type RecentSearch,
+} from '@/lib/history';
 import { DEFAULT_PERSONA } from '@/lib/personas';
 import { cn } from '@/lib/utils';
 
@@ -17,19 +23,24 @@ export function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const [recent, setRecent] = useState<RecentSearch[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setRecent(getRecent());
+    const refresh = () => setRecent(getRecent());
+    refresh();
+    window.addEventListener(RECENT_EVENT, refresh);
+    return () => window.removeEventListener(RECENT_EVENT, refresh);
   }, [pathname]);
 
   const rerun = async (r: RecentSearch) => {
+    setError(null);
     try {
       const { id } = await createResearch(r.query, r.mode, DEFAULT_PERSONA);
       setPending(id, { query: r.query, mode: r.mode, persona: DEFAULT_PERSONA });
       addRecent({ id, query: r.query, mode: r.mode, ts: Date.now() });
       router.push(`/research/${id}`);
     } catch {
-      /* backend down — home page surfaces the error */
+      setError("Can't reach the API — is the backend running?");
     }
   };
 
@@ -87,6 +98,7 @@ export function Sidebar() {
         </nav>
 
         <div className="scroll-slim min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+          {error && <p className="px-3 py-1 text-xs text-red-500">{error}</p>}
           {recent.length === 0 ? (
             <p className="px-3 py-1 text-xs text-faint">No threads yet</p>
           ) : (

@@ -34,6 +34,13 @@ from app.search import multi_search
 log = get_logger("research")
 
 
+def _fast_model() -> str:
+    """Default model for small utility calls (routing, query rewriting)."""
+    from app.llm.personas import chat_model, get_persona
+
+    return chat_model(get_persona(None))
+
+
 # --------------------------------------------------------------------------- #
 #  Chat fast path: plain conversation skips search/fetch/rank entirely
 # --------------------------------------------------------------------------- #
@@ -69,10 +76,12 @@ async def _needs_search(query: str, context: list[ConversationTurn]) -> bool:
         f'Message: "{q[:500]}"'
     )
     try:
-        text = await llm.chat([{"role": "user", "content": prompt}], temperature=0.0)
+        res = await llm.chat(
+            [{"role": "user", "content": prompt}], model=_fast_model(), temperature=0.0
+        )
     except LLMError:
         return True
-    return not text.strip().upper().startswith("CHAT")
+    return not res.content.strip().upper().startswith("CHAT")
 
 
 async def _run_chat(session: ResearchSession, started: float) -> ResearchResult:
@@ -162,10 +171,12 @@ async def _standalone_query(query: str, context: list[ConversationTurn]) -> str:
         f"without the conversation. Return only the query.\nFollow-up: {query}"
     )
     try:
-        text = await llm.chat([{"role": "user", "content": prompt}], temperature=0.2)
+        res = await llm.chat(
+            [{"role": "user", "content": prompt}], model=_fast_model(), temperature=0.2
+        )
     except LLMError:
         return heuristic
-    line = next((ln.strip("-*• \t\"") for ln in text.splitlines() if ln.strip()), "")
+    line = next((ln.strip("-*• \t\"") for ln in res.content.splitlines() if ln.strip()), "")
     return line if 3 <= len(line) <= 200 else heuristic
 
 
@@ -179,10 +190,12 @@ async def _expand_query(query: str, n: int) -> list[str]:
         "Return ONLY the queries, one per line, no numbering, no extra text."
     )
     try:
-        text = await llm.chat([{"role": "user", "content": prompt}], temperature=0.4)
+        res = await llm.chat(
+            [{"role": "user", "content": prompt}], model=_fast_model(), temperature=0.4
+        )
     except LLMError:
         return []
-    lines = [ln.strip("-*• \t") for ln in text.splitlines() if ln.strip()]
+    lines = [ln.strip("-*• \t") for ln in res.content.splitlines() if ln.strip()]
     cleaned = [ln for ln in lines if 3 <= len(ln) <= 200 and ln.lower() != query.lower()]
     return cleaned[:n]
 

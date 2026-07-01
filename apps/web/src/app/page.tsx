@@ -37,11 +37,13 @@ export default function HomePage() {
   return (
     <div className="flex min-h-[calc(100dvh-3.5rem)] flex-col md:min-h-dvh">
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-4 py-10 sm:px-6">
-        <h1 className="mb-8 text-center text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+        <h1 className="mb-8 bg-gradient-to-r from-ink via-accent to-ink bg-clip-text text-center text-3xl font-medium tracking-tight text-transparent animate-slide-up sm:text-4xl">
           lumen
         </h1>
 
-        <SearchBar onSubmit={start} busy={busy} />
+        <div className="animate-slide-up" style={{ animationDelay: '80ms' }}>
+          <SearchBar onSubmit={start} busy={busy} />
+        </div>
 
         {error && <p className="mt-3 text-center text-sm text-red-500">{error}</p>}
 

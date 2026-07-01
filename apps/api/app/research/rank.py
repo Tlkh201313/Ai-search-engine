@@ -115,6 +115,12 @@ def build_excerpt(query: str, text: str, max_words: int = 220) -> str:
     return truncate_words("\n\n".join(chosen), max_words)
 
 
+def _clean_snippet(text: str, limit: int = 280) -> str:
+    """First readable prose from a page — skips markdown-table debris (wiki infoboxes)."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("|")]
+    return " ".join(lines)[:limit].strip()
+
+
 def rank_pages(query: str, pages: list[FetchedPage], mode: ModeConfig) -> list[Source]:
     """Score readable pages and return them as ordered, citable sources."""
     query_kw = keywords(query)
@@ -138,7 +144,7 @@ def rank_pages(query: str, pages: list[FetchedPage], mode: ModeConfig) -> list[S
             url=page.url,
             title=page.title or page.domain,
             domain=page.domain,
-            snippet=(page.description or page.text[:280]).strip(),
+            snippet=(page.description or _clean_snippet(page.text)).strip(),
             excerpt=build_excerpt(query, page.text),
             author=page.author,
             description=page.description,

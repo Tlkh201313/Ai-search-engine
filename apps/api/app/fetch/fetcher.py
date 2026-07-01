@@ -27,6 +27,18 @@ _MAX_RETRIES = 1
 _MAX_REDIRECTS = 4
 _MAX_BYTES = 2_500_000  # cap a single page download at ~2.5 MB
 
+# Wikimedia's UA policy 403s browser-spoofing bots; they require a descriptive
+# UA with contact info (their search API already uses one — see search/wikipedia.py).
+_WIKI_UA = "Lumen-Research/1.0 (+https://github.com/lumen; grounded research engine)"
+_WIKI_SUFFIXES = ("wikipedia.org", "wikimedia.org", "wiktionary.org", "wikidata.org")
+
+
+def _headers_for(url: str) -> dict[str, str]:
+    headers = default_headers()
+    if domain_of(url).endswith(_WIKI_SUFFIXES):
+        headers["User-Agent"] = _WIKI_UA
+    return headers
+
 
 @dataclass
 class FetchedPage:
@@ -112,7 +124,7 @@ async def _download(url: str, client: httpx.AsyncClient, max_chars: int) -> Fetc
     """Single fetch with manual, SSRF-validated redirects and a byte cap."""
     current = url
     for _ in range(_MAX_REDIRECTS + 1):
-        async with client.stream("GET", current, headers=default_headers()) as resp:
+        async with client.stream("GET", current, headers=_headers_for(current)) as resp:
             if resp.is_redirect:
                 location = resp.headers.get("location")
                 if not location:

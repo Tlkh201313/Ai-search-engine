@@ -35,3 +35,6 @@ Thumbs.db
 .vscode/
 
 .evolve/
+
+.playwright-mcp/
+/*.png

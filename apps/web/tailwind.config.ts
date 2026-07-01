@@ -37,6 +37,10 @@ const config: Config = {
           from: { opacity: '0', transform: 'translateY(4px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
+        'slide-up': {
+          from: { opacity: '0', transform: 'translateY(10px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
         'fade-in-fast': {
           from: { opacity: '0' },
           to: { opacity: '1' },
@@ -55,6 +59,7 @@ const config: Config = {
       },
       animation: {
         'fade-in': 'fade-in 0.4s ease-out both',
+        'slide-up': 'slide-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both',
         'fade-in-fast': 'fade-in-fast 0.25s ease-out both',
         shimmer: 'shimmer 1.6s infinite',
         'pulse-dot': 'pulse-dot 1.4s ease-in-out infinite',
