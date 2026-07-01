@@ -11,7 +11,7 @@ export function ExamplePrompts({
   onPick: (query: string, mode: ResearchMode) => void;
 }) {
   return (
-    <div className="grid gap-2.5 sm:grid-cols-2">
+    <div className="flex flex-col divide-y divide-line">
       {EXAMPLE_PROMPTS.map((ex) => {
         const Icon = MODE_MAP[ex.mode].icon;
         return (
@@ -19,10 +19,12 @@ export function ExamplePrompts({
             key={ex.q}
             type="button"
             onClick={() => onPick(ex.q, ex.mode)}
-            className="group flex items-start gap-3 rounded-xl border border-line bg-surface p-3.5 text-left transition-all hover:border-accent/40 hover:shadow-subtle"
+            className="group flex items-center gap-3 py-3 text-left transition-colors hover:text-accent"
           >
-            <Icon className="mt-0.5 h-4 w-4 shrink-0 text-faint transition-colors group-hover:text-accent" />
-            <span className="flex-1 text-sm leading-snug text-ink">{ex.q}</span>
+            <Icon className="h-4 w-4 shrink-0 text-faint transition-colors group-hover:text-accent" />
+            <span className="flex-1 text-sm text-muted transition-colors group-hover:text-accent">
+              {ex.q}
+            </span>
             <ArrowUpRight className="h-4 w-4 shrink-0 text-faint opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
         );

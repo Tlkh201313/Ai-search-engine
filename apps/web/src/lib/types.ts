@@ -111,6 +111,7 @@ export interface ProgressEvent {
     used?: number[];
     heartbeat?: boolean;
     cached?: boolean;
+    chat?: boolean;
     [key: string]: unknown;
   };
 }

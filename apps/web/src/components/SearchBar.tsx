@@ -69,8 +69,8 @@ export function SearchBar({
     <div className="w-full">
       <div
         className={cn(
-          'group relative rounded-2xl border border-line bg-surface shadow-card transition-shadow',
-          'focus-within:border-accent/40 focus-within:shadow-float',
+          'group relative rounded-3xl border border-line bg-surface shadow-card transition-all',
+          'focus-within:border-accent/40 focus-within:shadow-float focus-within:ring-4 focus-within:ring-accent/10',
         )}
       >
         <div className="flex items-start gap-3 px-4 pt-4">
@@ -109,9 +109,9 @@ export function SearchBar({
               disabled={!canSubmit}
               aria-label="Search"
               className={cn(
-                'flex h-9 w-9 items-center justify-center rounded-xl transition-all',
+                'flex h-9 w-9 items-center justify-center rounded-full transition-all',
                 canSubmit
-                  ? 'bg-accent text-white hover:bg-accent/90'
+                  ? 'bg-accent text-white hover:bg-accent/90 hover:scale-105'
                   : 'bg-ink/8 text-faint',
               )}
             >

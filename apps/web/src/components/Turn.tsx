@@ -10,6 +10,7 @@ import { cn, faviconFor } from '@/lib/utils';
 import { AnswerView } from './AnswerView';
 import { ProgressTrail } from './ProgressTrail';
 import { SourceCard } from './SourceCard';
+import { ThinkingIndicator } from './ThinkingIndicator';
 
 export interface TurnData {
   id: string;
@@ -79,8 +80,10 @@ export function Turn({ turn, onState, onFollowUp }: Props) {
   }, [state, turn.id, onState]);
 
   const query = state.result?.query || turn.query;
-  const sources = state.sources;
-  const showTrail = state.status !== 'error' && !state.answerText && !state.result;
+  // Chat turns never carry sources; a completed chat result also has none.
+  const chat = state.chat || (!!state.result && state.sources.length === 0);
+  const sources = chat ? [] : state.sources;
+  const showLoading = state.status !== 'error' && !state.answerText && !state.result;
   const failed = state.status === 'error' && !state.answerText;
 
   const onCite = (id: number) => {
@@ -131,14 +134,27 @@ export function Turn({ turn, onState, onFollowUp }: Props) {
             </button>
           </div>
         </div>
-      ) : showTrail ? (
-        <div className="rounded-xl border border-line bg-surface p-5 animate-fade-in">
-          <ProgressTrail
-            stageStatus={state.stageStatus}
-            counts={state.counts}
-            subqueries={state.subqueries}
-          />
-        </div>
+      ) : showLoading ? (
+        // While connecting / routing we don't yet know chat vs research —
+        // show the calm Thinking indicator, not the search trail.
+        chat || state.status === 'connecting' ? (
+          <ThinkingIndicator />
+        ) : (
+          <div className="rounded-xl border border-line bg-surface p-4 animate-fade-in">
+            <ProgressTrail
+              stageStatus={state.stageStatus}
+              counts={state.counts}
+              subqueries={state.subqueries}
+            />
+          </div>
+        )
+      ) : chat ? (
+        <AnswerView
+          state={state}
+          mode={state.result?.mode || turn.mode}
+          onCite={onCite}
+          onFollowUp={onFollowUp}
+        />
       ) : (
         <>
           <div className="mb-5 flex items-center gap-6 border-b border-line">

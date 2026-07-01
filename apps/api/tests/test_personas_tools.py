@@ -118,7 +118,8 @@ async def test_agent_uses_tools_and_cites_new_source(monkeypatch):
 
     sources = [_src(1, "https://a.com", "a.com")]
     ans, info, final_sources = await answer_mod.generate_answer(
-        "the question", get_mode(ResearchMode.quick), sources, persona_key="lunar"
+        # deep mode keeps the tool loop on (quick sets tool_rounds=0 for speed)
+        "the question", get_mode(ResearchMode.deep), sources, persona_key="lunar"
     )
     assert info.grounded is True and info.model == "Lunar"
     assert any(s.id == 2 and s.url == "https://doc.example/x" for s in final_sources)

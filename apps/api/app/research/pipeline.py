@@ -82,12 +82,13 @@ async def _run_chat(session: ResearchSession, started: float) -> ResearchResult:
 
     persona = get_persona(session.persona)
 
-    def emit(stage: ProgressStage, message: str, progress: float, **data) -> None:
-        session.emit(
-            ProgressEvent(stage=stage, status="active", message=message, progress=progress, data=data)
+    # Signal the UI to switch to the chat (Thinking…) view, not the search trail.
+    session.emit(
+        ProgressEvent(
+            stage=ProgressStage.writing, status="active", message="Thinking",
+            progress=0.2, data={"chat": True},
         )
-
-    emit(ProgressStage.writing, "Answering", 0.3)
+    )
 
     async def on_delta(text: str) -> None:
         session.emit(
@@ -219,38 +220,40 @@ async def run_research(session: ResearchSession) -> ResearchResult:
         return result
 
     try:
-        # --- 0. Route: plain chat skips the whole research pipeline ---
-        emit(ProgressStage.understanding, "Understanding your question", 0.05)
-        if not await _needs_search(query, context):
+        # --- 0. Route + seed search, concurrently ---
+        # The chat/search router runs in parallel with the optimistic seed
+        # search chain, so research queries pay zero routing latency and chat
+        # queries only wait for the (fast) router. No research-stage events are
+        # emitted for chat — the UI shows a Thinking indicator instead.
+        t_search = time.monotonic()
+
+        async def _seed_chain() -> tuple[str, list]:
+            seed = await _standalone_query(query, context)
+            return seed, await multi_search(
+                [seed], providers=settings.search_providers, limit=mode.search_limit
+            )
+
+        route_task = asyncio.create_task(_needs_search(query, context))
+        seed_task = asyncio.create_task(_seed_chain())
+        if not await route_task:
+            seed_task.cancel()
             return await _run_chat(session, started)
 
         # --- 1. Understanding ---
-        search_seed = await _standalone_query(query, context)
+        emit(ProgressStage.understanding, "Understanding your question", 0.05)
+        extra = await _expand_query(query, mode.expansions)
+        if extra:
+            emit(ProgressStage.understanding, "Expanded the query", 0.1, subqueries=extra)
 
         # --- 2. Searching ---
-        # Fire the seed search immediately and generate query expansions in
-        # parallel, so the (LLM) expansion call overlaps with the first search
-        # round instead of blocking it.
-        t_search = time.monotonic()
-        seed_task = asyncio.create_task(
-            multi_search([search_seed], providers=settings.search_providers, limit=mode.search_limit)
-        )
-        extra = await _expand_query(search_seed, mode.expansions)
-        if extra or search_seed != query:
-            emit(
-                ProgressStage.understanding,
-                "Expanded the query",
-                0.1,
-                subqueries=([search_seed] if search_seed != query else []) + extra,
-            )
-
         emit(ProgressStage.searching, "Searching the web", 0.2)
         extra_results = (
             await multi_search(extra, providers=settings.search_providers, limit=mode.search_limit)
             if extra
             else []
         )
-        raw_results = (await seed_task) + extra_results
+        search_seed, seed_results = await seed_task
+        raw_results = seed_results + extra_results
         search_ms = int((time.monotonic() - t_search) * 1000)
 
         # --- 3. Finding sources (dedupe search hits) ---

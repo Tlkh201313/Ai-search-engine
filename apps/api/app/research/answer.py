@@ -107,13 +107,17 @@ async def _gather(
     Returns the model's draft answer if it produced one before the tool budget
     ran out (used as notes for the streamed synthesis); otherwise ``""``.
     """
+    rounds = settings.llm_max_tool_rounds if mode.tool_rounds is None else mode.tool_rounds
+    if rounds <= 0:
+        return ""  # mode opts out of the tool loop — synthesize straight from sources
+
     full_system = system if not extra_system else f"{system}\n\n{extra_system}"
     messages: list[dict] = [
         {"role": "user", "content": _build_user_prompt(query, mode, collector.sources, context)}
     ]
     tools = TOOL_SCHEMAS
 
-    for _ in range(settings.llm_max_tool_rounds):
+    for _ in range(rounds):
         res = await llm.chat(messages, model=model, system=full_system, tools=tools, temperature=0.2)
         if not res.tool_calls:
             return res.content  # model is done gathering; keep its draft as notes

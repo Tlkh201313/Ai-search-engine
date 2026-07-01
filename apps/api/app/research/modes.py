@@ -20,6 +20,9 @@ class ModeConfig:
     prefer_domains: tuple[str, ...] = ()
     style: str = ""
     providers: tuple[str, ...] = ()  # override enabled providers (empty = default)
+    # Evidence-gathering LLM tool rounds before synthesis. 0 = synthesize straight
+    # from the fetched sources (fastest); None = settings.llm_max_tool_rounds.
+    tool_rounds: int | None = None
 
 
 _MODES: dict[ResearchMode, ModeConfig] = {
@@ -33,6 +36,7 @@ _MODES: dict[ResearchMode, ModeConfig] = {
         expansions=0,
         weights={"relevance": 0.55, "freshness": 0.10, "quality": 0.20, "depth": 0.15},
         style="Be concise and direct. Lead with the answer.",
+        tool_rounds=0,  # one streamed synthesis call — speed is the point of Quick
     ),
     ResearchMode.deep: ModeConfig(
         key=ResearchMode.deep,
@@ -73,6 +77,7 @@ _MODES: dict[ResearchMode, ModeConfig] = {
             "nytimes.com", "bloomberg.com", "ft.com", "cnbc.com", "aljazeera.com",
         ),
         style="Prioritize the latest developments. Note dates. Flag fast-moving stories.",
+        tool_rounds=1,  # freshness beats depth — one gap-filling round is enough
     ),
     ResearchMode.academic: ModeConfig(
         key=ResearchMode.academic,

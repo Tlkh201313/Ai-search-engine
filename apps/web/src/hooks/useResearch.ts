@@ -25,6 +25,7 @@ export interface ResearchState {
   result: ResearchResult | null;
   error: string | null;
   stageStatus: Record<string, StageStatus>;
+  chat: boolean;
 }
 
 const initialState = (): ResearchState => ({
@@ -39,6 +40,7 @@ const initialState = (): ResearchState => ({
   result: null,
   error: null,
   stageStatus: Object.fromEntries(STAGE_ORDER.map((s) => [s, 'pending'])),
+  chat: false,
 });
 
 function advanceStages(
@@ -60,6 +62,10 @@ export function useResearch(
 ): ResearchState {
   const [state, setState] = useState<ResearchState>(initialState);
   const startedRef = useRef(false);
+  // Streaming deltas are buffered and flushed on a timer: re-rendering the
+  // markdown tree per token is the main UI cost while an answer streams.
+  const deltaBufRef = useRef('');
+  const flushTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -106,18 +112,40 @@ export function useResearch(
   }, [id]);
 
   function attach() {
-    return openResearchStream(id, {
+    const flush = () => {
+      flushTimerRef.current = null;
+      const chunk = deltaBufRef.current;
+      if (!chunk) return;
+      deltaBufRef.current = '';
+      setState((prev) => ({ ...prev, status: 'running', answerText: prev.answerText + chunk }));
+    };
+
+    const closeStream = openResearchStream(id, {
       onEvent: (event) => {
+        if (event.data?.heartbeat) return;
+        if (event.data?.delta && !event.data?.result) {
+          deltaBufRef.current += event.data.delta;
+          if (flushTimerRef.current == null)
+            flushTimerRef.current = window.setTimeout(flush, 80);
+          return;
+        }
         setState((prev) => {
-          if (event.data?.heartbeat) return prev;
+          // Merge any buffered deltas so ordering is preserved.
+          let answerText = prev.answerText;
+          if (deltaBufRef.current) {
+            answerText += deltaBufRef.current;
+            deltaBufRef.current = '';
+          }
           const next: ResearchState = {
             ...prev,
+            answerText,
             status: 'running',
             stage: event.stage,
             message: event.message || prev.message,
             progress: Math.max(prev.progress, event.progress || 0),
             stageStatus: advanceStages(prev.stageStatus, event.stage, event.status),
           };
+          if (event.data?.chat) next.chat = true;
           if (event.data?.subqueries) next.subqueries = event.data.subqueries;
           if (typeof event.data?.candidates === 'number')
             next.counts = { ...next.counts, candidates: event.data.candidates };
@@ -126,7 +154,6 @@ export function useResearch(
           if (typeof event.data?.readable === 'number')
             next.counts = { ...next.counts, readable: event.data.readable };
           if (event.data?.sources) next.sources = event.data.sources;
-          if (event.data?.delta) next.answerText = prev.answerText + event.data.delta;
           if (event.data?.result) {
             const result = event.data.result;
             next.result = result;
@@ -150,6 +177,11 @@ export function useResearch(
         );
       },
     });
+
+    return () => {
+      if (flushTimerRef.current != null) window.clearTimeout(flushTimerRef.current);
+      closeStream();
+    };
   }
 
   return state;

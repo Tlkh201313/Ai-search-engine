@@ -47,7 +47,7 @@ export function ChatInput({
   const canSubmit = query.trim().length >= 2 && !busy;
 
   return (
-    <div className="rounded-2xl border border-line bg-surface shadow-card focus-within:border-accent/40">
+    <div className="rounded-3xl border border-line bg-surface shadow-card transition-all focus-within:border-accent/40 focus-within:shadow-float focus-within:ring-4 focus-within:ring-accent/10">
       <textarea
         ref={ref}
         value={query}
@@ -76,8 +76,8 @@ export function ChatInput({
           disabled={!canSubmit}
           aria-label="Send"
           className={cn(
-            'flex h-9 w-9 items-center justify-center rounded-xl transition-all',
-            canSubmit ? 'bg-accent text-white hover:bg-accent/90' : 'bg-ink/8 text-faint',
+            'flex h-9 w-9 items-center justify-center rounded-full transition-all',
+            canSubmit ? 'bg-accent text-white hover:bg-accent/90 hover:scale-105' : 'bg-ink/8 text-faint',
           )}
         >
           <ArrowUp className="h-[18px] w-[18px]" />

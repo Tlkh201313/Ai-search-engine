@@ -1,12 +1,13 @@
 'use client';
 
 import {
-  ArrowRight,
   Check,
   CircleAlert,
   Copy,
   GitCompareArrows,
   Link2,
+  Plus,
+  RotateCw,
   Sparkles,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -98,6 +99,14 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
             icon={Link2}
             getText={() => (typeof window !== 'undefined' ? window.location.href : '')}
           />
+          <button
+            type="button"
+            onClick={() => onFollowUp(result.query, mode)}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition-colors hover:bg-ink/5 hover:text-ink"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+            Rewrite
+          </button>
         </div>
       )}
 
@@ -208,17 +217,17 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
 
           {answer.follow_ups.length > 0 && (
             <section className="mt-6">
-              <SectionTitle icon={ArrowRight}>Follow-up questions</SectionTitle>
-              <div className="mt-3 flex flex-col gap-2">
+              <SectionTitle icon={Sparkles}>Related</SectionTitle>
+              <div className="mt-2 flex flex-col divide-y divide-line">
                 {answer.follow_ups.map((q, i) => (
                   <button
                     key={i}
                     type="button"
                     onClick={() => onFollowUp(q, mode)}
-                    className="group flex items-center justify-between gap-3 rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-sm text-ink transition-colors hover:border-accent/40 hover:bg-accent/[0.04]"
+                    className="group flex items-center justify-between gap-3 py-3 text-left text-[15px] font-medium text-ink transition-colors hover:text-accent"
                   >
                     <span>{q}</span>
-                    <ArrowRight className="h-4 w-4 shrink-0 text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
+                    <Plus className="h-4 w-4 shrink-0 text-faint transition-colors group-hover:text-accent" />
                   </button>
                 ))}
               </div>
