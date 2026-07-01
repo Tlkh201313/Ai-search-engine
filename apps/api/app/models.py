@@ -102,10 +102,19 @@ class ResearchTimings(BaseModel):
 # --------------------------------------------------------------------------- #
 #  Requests / responses
 # --------------------------------------------------------------------------- #
+class ConversationTurn(BaseModel):
+    """A prior question and its short answer, used to ground follow-ups."""
+
+    query: str = Field(max_length=2000)
+    answer: str = Field(default="", max_length=4000)
+
+
 class ResearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=2000)
     mode: ResearchMode = ResearchMode.quick
     max_sources: int | None = Field(default=None, ge=1, le=20)
+    # Prior turns in the same conversation (most recent last), for follow-ups.
+    context: list[ConversationTurn] = Field(default_factory=list, max_length=8)
 
     @field_validator("query")
     @classmethod

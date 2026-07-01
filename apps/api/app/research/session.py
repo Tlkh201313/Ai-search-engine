@@ -8,7 +8,13 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
-from app.models import ProgressEvent, ProgressStage, ResearchMode, ResearchResult
+from app.models import (
+    ConversationTurn,
+    ProgressEvent,
+    ProgressStage,
+    ResearchMode,
+    ResearchResult,
+)
 
 _MAX_SESSIONS = 200
 _SESSION_TTL = 1800  # seconds
@@ -20,6 +26,7 @@ class ResearchSession:
     id: str
     query: str
     mode: ResearchMode
+    context: list[ConversationTurn] = field(default_factory=list)
     status: str = "running"  # running | complete | error
     created_at: float = field(default_factory=time.time)
     result: ResearchResult | None = None
@@ -62,9 +69,16 @@ class SessionRegistry:
     def __init__(self) -> None:
         self._sessions: dict[str, ResearchSession] = {}
 
-    def create(self, query: str, mode: ResearchMode) -> ResearchSession:
+    def create(
+        self,
+        query: str,
+        mode: ResearchMode,
+        context: list[ConversationTurn] | None = None,
+    ) -> ResearchSession:
         self._prune()
-        session = ResearchSession(id=uuid.uuid4().hex[:16], query=query, mode=mode)
+        session = ResearchSession(
+            id=uuid.uuid4().hex[:16], query=query, mode=mode, context=context or []
+        )
         self._sessions[session.id] = session
         return session
 

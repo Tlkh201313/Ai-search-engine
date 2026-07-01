@@ -36,3 +36,29 @@ def test_rank_skips_empty_pages(sample_pages):
     mode = get_mode(ResearchMode.quick)
     sources = rank_pages("python", pages, mode)
     assert all(s.url != "https://x.com" for s in sources)
+
+
+def _page(domain: str, n: int):
+    from app.fetch.fetcher import FetchedPage
+
+    text = f"{domain} article {n}. python programming language details. " * 30
+    return FetchedPage(
+        url=f"https://{domain}/{n}", ok=True, status=200, title=f"{domain} {n}",
+        domain=domain, text=text, word_count=len(text.split()),
+    )
+
+
+def test_ranking_prefers_domain_diversity():
+    # More candidates than slots (5 + 2, keep 4): diversity caps the dominant domain.
+    pages = [_page("aaa.com", i) for i in range(5)] + [_page("bbb.com", i) for i in range(2)]
+    sources = rank_pages("python programming", pages, get_mode(ResearchMode.quick))
+    domains = [s.domain for s in sources]
+    assert "bbb.com" in domains, "diverse domain should be included"
+    assert domains.count("aaa.com") <= 2, "one domain should not dominate"
+
+
+def test_ranking_backfills_single_domain():
+    # All same domain: diversity must not starve the result — backfill fills it.
+    pages = [_page("only.com", i) for i in range(5)]
+    sources = rank_pages("python programming", pages, get_mode(ResearchMode.quick))
+    assert len(sources) == get_mode(ResearchMode.quick).max_sources

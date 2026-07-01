@@ -33,14 +33,20 @@ export class ApiError extends Error {
   }
 }
 
+export interface ConversationTurn {
+  query: string;
+  answer: string;
+}
+
 export async function createResearch(
   query: string,
   mode: ResearchMode,
+  context: ConversationTurn[] = [],
 ): Promise<{ id: string; query: string; mode: ResearchMode }> {
   const res = await fetch(`${API_BASE}/api/research`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ query, mode }),
+    body: JSON.stringify({ query, mode, context }),
   });
   return json(res);
 }

@@ -158,7 +158,27 @@ def rank_pages(query: str, pages: list[FetchedPage], mode: ModeConfig) -> list[S
         scored.append((overall, source))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    ranked = [s for _, s in scored][: mode.max_sources]
+    ranked = _diversify([s for _, s in scored], mode.max_sources)
     for idx, source in enumerate(ranked, start=1):
         source.id = idx
     return ranked
+
+
+def _diversify(sources: list[Source], limit: int, max_per_domain: int = 2) -> list[Source]:
+    """Prefer a spread of domains, but backfill so single-domain sets still fill up."""
+    picked: list[Source] = []
+    overflow: list[Source] = []
+    counts: dict[str, int] = {}
+    for source in sources:
+        if counts.get(source.domain, 0) < max_per_domain:
+            picked.append(source)
+            counts[source.domain] = counts.get(source.domain, 0) + 1
+        else:
+            overflow.append(source)
+        if len(picked) >= limit:
+            return picked[:limit]
+    for source in overflow:  # relax the cap only if we still have room
+        if len(picked) >= limit:
+            break
+        picked.append(source)
+    return picked[:limit]

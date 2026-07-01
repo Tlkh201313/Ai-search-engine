@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from app.llm import llm
 from app.llm.client import LLMError
 from app.logging import get_logger
-from app.models import Answer, ModelInfo, Source
+from app.models import Answer, ConversationTurn, ModelInfo, Source
 from app.research.citations import apply_citations, sanitize
 from app.research.modes import ModeConfig
 from app.textutil import truncate_words
@@ -68,8 +68,18 @@ _LIST_FIELDS = {"key_takeaways", "agreements", "disagreements", "uncertainties",
 _HEADER_RE = re.compile(r"^#{1,6}\s+(.*)$")
 
 
-def _build_user_prompt(query: str, mode: ModeConfig, sources: list[Source]) -> str:
-    lines = [f"Question: {query}", "", f"Mode: {mode.label} — {mode.style}", "", "Sources:"]
+def _build_user_prompt(
+    query: str, mode: ModeConfig, sources: list[Source], context: list[ConversationTurn]
+) -> str:
+    lines: list[str] = []
+    if context:
+        lines.append("Conversation so far (for context; do not re-answer these):")
+        for turn in context[-4:]:
+            lines.append(f"Q: {turn.query}")
+            if turn.answer:
+                lines.append(f"A: {truncate_words(turn.answer, 60)}")
+        lines.append("")
+    lines += [f"Question: {query}", "", f"Mode: {mode.label} — {mode.style}", "", "Sources:"]
     for s in sources:
         meta = s.domain
         if s.published_at:
@@ -128,8 +138,10 @@ async def generate_answer(
     mode: ModeConfig,
     sources: list[Source],
     on_delta: DeltaCallback | None = None,
+    context: list[ConversationTurn] | None = None,
 ) -> tuple[Answer, ModelInfo]:
     """Produce a grounded Answer. Streams deltas via ``on_delta`` when possible."""
+    context = context or []
     if not sources:
         return _no_sources_answer(query), ModelInfo(
             model=llm.model, available=llm.available(), grounded=False
@@ -137,7 +149,7 @@ async def generate_answer(
 
     if llm.available():
         try:
-            return await _llm_answer(query, mode, sources, on_delta)
+            return await _llm_answer(query, mode, sources, on_delta, context)
         except LLMError as exc:
             log.warning("LLM answer failed, using extractive fallback: %s", exc)
 
@@ -152,8 +164,9 @@ async def _llm_answer(
     mode: ModeConfig,
     sources: list[Source],
     on_delta: DeltaCallback | None,
+    context: list[ConversationTurn],
 ) -> tuple[Answer, ModelInfo]:
-    user_prompt = _build_user_prompt(query, mode, sources)
+    user_prompt = _build_user_prompt(query, mode, sources, context)
     chunks: list[str] = []
     async for delta in llm.stream(
         [{"role": "user", "content": user_prompt}], system=_SYSTEM, temperature=0.2

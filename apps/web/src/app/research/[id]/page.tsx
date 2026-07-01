@@ -2,7 +2,7 @@
 
 import { Library } from 'lucide-react';
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatInput } from '@/components/ChatInput';
 import { SourceDrawer } from '@/components/SourceDrawer';
@@ -10,13 +10,15 @@ import { SourcePanel } from '@/components/SourcePanel';
 import { TopBar } from '@/components/TopBar';
 import { Turn, type TurnData } from '@/components/Turn';
 import type { ResearchState } from '@/hooks/useResearch';
-import { ApiError, createResearch } from '@/lib/api';
+import { ApiError, createResearch, type ConversationTurn } from '@/lib/api';
 import { addRecent, takePending } from '@/lib/history';
 import type { ResearchMode, Source } from '@/lib/types';
 
 interface TurnSummary {
   sources: Source[];
   status: ResearchState['status'];
+  query: string;
+  answer: string;
 }
 
 export default function ResearchPage() {
@@ -32,6 +34,12 @@ export default function ResearchPage() {
   const [busy, setBusy] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
 
+  // Refs mirror latest state so callbacks can read it without stale closures.
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const summariesRef = useRef(summaries);
+  summariesRef.current = summaries;
+
   useEffect(() => {
     const pending = takePending(id);
     setTurns([
@@ -46,14 +54,20 @@ export default function ResearchPage() {
   const handleState = useCallback((turnId: string, state: ResearchState) => {
     setSummaries((prev) => {
       const existing = prev[turnId];
+      const answer = state.result?.answer.summary ?? '';
+      const query = state.result?.query ?? existing?.query ?? '';
       if (
         existing &&
         existing.status === state.status &&
-        existing.sources === state.sources
+        existing.sources === state.sources &&
+        existing.answer === answer
       ) {
         return prev;
       }
-      return { ...prev, [turnId]: { sources: state.sources, status: state.status } };
+      return {
+        ...prev,
+        [turnId]: { sources: state.sources, status: state.status, query, answer },
+      };
     });
   }, []);
 
@@ -84,8 +98,15 @@ export default function ResearchPage() {
   const handleFollowUp = useCallback(async (query: string, m: ResearchMode) => {
     setBusy(true);
     setFollowError(null);
+    // Build conversation context from completed prior turns (in order).
+    const context: ConversationTurn[] = turnsRef.current
+      .map((t) => {
+        const s = summariesRef.current[t.id];
+        return { query: s?.query || t.query, answer: s?.answer || '' };
+      })
+      .filter((c) => c.query && c.answer);
     try {
-      const { id: newId } = await createResearch(query, m);
+      const { id: newId } = await createResearch(query, m, context);
       addRecent({ id: newId, query, mode: m, ts: Date.now() });
       setTurns((prev) => [...prev, { id: newId, query, mode: m, live: true }]);
       setActiveTurnId(newId);

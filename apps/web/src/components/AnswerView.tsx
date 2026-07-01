@@ -2,13 +2,17 @@
 
 import {
   ArrowRight,
+  Check,
   CircleAlert,
+  Copy,
   GitCompareArrows,
+  Link2,
   Sparkles,
 } from 'lucide-react';
+import { useState } from 'react';
 
 import type { ResearchState } from '@/hooks/useResearch';
-import type { ResearchMode } from '@/lib/types';
+import type { Answer, ResearchMode, Source } from '@/lib/types';
 import { cn, confidenceLabel, formatMs } from '@/lib/utils';
 
 import { AnswerSkeleton } from './Skeletons';
@@ -30,6 +34,52 @@ function SectionTitle({ icon: Icon, children }: { icon?: React.ElementType; chil
   );
 }
 
+function answerToText(answer: Answer, sources: Source[]): string {
+  const lines: string[] = [];
+  if (answer.summary) lines.push(answer.summary, '');
+  if (answer.detail) lines.push(answer.detail, '');
+  if (answer.key_takeaways.length) {
+    lines.push('Key takeaways:');
+    answer.key_takeaways.forEach((t) => lines.push(`- ${t}`));
+    lines.push('');
+  }
+  if (sources.length) {
+    lines.push('Sources:');
+    sources.forEach((s) => lines.push(`[${s.id}] ${s.title} — ${s.url}`));
+  }
+  return lines.join('\n').trim();
+}
+
+function CopyButton({
+  label,
+  icon: Icon,
+  getText,
+}: {
+  label: string;
+  icon: React.ElementType;
+  getText: () => string;
+}) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(getText());
+          setDone(true);
+          setTimeout(() => setDone(false), 1600);
+        } catch {
+          /* clipboard unavailable */
+        }
+      }}
+      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition-colors hover:bg-ink/5 hover:text-ink"
+    >
+      {done ? <Check className="h-3.5 w-3.5 text-accent" /> : <Icon className="h-3.5 w-3.5" />}
+      {done ? 'Copied' : label}
+    </button>
+  );
+}
+
 export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
   const { result, sources, answerText, status } = state;
   const answer = result?.answer;
@@ -39,6 +89,18 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
 
   return (
     <div className="animate-fade-in">
+      {/* Actions */}
+      {answer && result && (
+        <div className="mb-3 flex items-center gap-1">
+          <CopyButton label="Copy" icon={Copy} getText={() => answerToText(answer, sources)} />
+          <CopyButton
+            label="Share"
+            icon={Link2}
+            getText={() => (typeof window !== 'undefined' ? window.location.href : '')}
+          />
+        </div>
+      )}
+
       {/* Direct answer */}
       {answer?.summary && (
         <div className="mb-5 border-l-2 border-accent/50 pl-4">

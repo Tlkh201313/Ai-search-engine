@@ -47,6 +47,8 @@ def extract(html: str, url: str, max_chars: int) -> Extracted:
     if not text:
         text = _fallback_text(html)
     text = _clean(text)[:max_chars]
+    if _HAS_TRAFILATURA:
+        _enrich_meta(html, meta)
     return Extracted(
         title=meta.get("title", ""),
         text=text,
@@ -56,6 +58,24 @@ def extract(html: str, url: str, max_chars: int) -> Extracted:
         canonical=meta.get("canonical"),
         meta=meta,
     )
+
+
+def _enrich_meta(html: str, meta: dict[str, str]) -> None:
+    """Fill only the metadata fields the HTML tags didn't already provide."""
+    try:
+        doc = trafilatura.extract_metadata(html)
+    except Exception:
+        return
+    if doc is None:
+        return
+    for key, value in (
+        ("title", getattr(doc, "title", None)),
+        ("author", getattr(doc, "author", None)),
+        ("published_at", getattr(doc, "date", None)),
+        ("description", getattr(doc, "description", None)),
+    ):
+        if not meta.get(key) and value:
+            meta[key] = str(value)
 
 
 def _read_meta(html: str) -> dict[str, str]:

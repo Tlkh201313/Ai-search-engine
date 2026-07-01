@@ -13,6 +13,7 @@ from app.llm import llm
 from app.llm.client import LLMError
 from app.logging import get_logger
 from app.models import (
+    ConversationTurn,
     ModelInfo,
     ProgressEvent,
     ProgressStage,
@@ -29,6 +30,27 @@ from app.research.session import ResearchSession
 from app.search import multi_search
 
 log = get_logger("research")
+
+
+async def _standalone_query(query: str, context: list[ConversationTurn]) -> str:
+    """Turn a context-dependent follow-up (“why is that?”) into a self-contained query."""
+    if not context:
+        return query
+    heuristic = f"{context[-1].query} {query}".strip()
+    if not llm.available():
+        return heuristic
+    convo = "\n".join(f"Q: {t.query}" for t in context[-4:])
+    prompt = (
+        f"Conversation so far:\n{convo}\n\n"
+        f"Rewrite this follow-up into ONE standalone web search query that makes sense "
+        f"without the conversation. Return only the query.\nFollow-up: {query}"
+    )
+    try:
+        text = await llm.chat([{"role": "user", "content": prompt}], temperature=0.2)
+    except LLMError:
+        return heuristic
+    line = next((ln.strip("-*• \t\"") for ln in text.splitlines() if ln.strip()), "")
+    return line if 3 <= len(line) <= 200 else heuristic
 
 
 async def _expand_query(query: str, n: int) -> list[str]:
@@ -49,13 +71,15 @@ async def _expand_query(query: str, n: int) -> list[str]:
     return cleaned[:n]
 
 
-def _cache_key(query: str, mode: ResearchMode) -> str:
-    return make_key("research", query.lower().strip(), mode.value)
+def _cache_key(query: str, mode: ResearchMode, context: list[ConversationTurn]) -> str:
+    ctx_sig = "|".join(t.query for t in context)
+    return make_key("research", query.lower().strip(), mode.value, ctx_sig)
 
 
 async def run_research(session: ResearchSession) -> ResearchResult:
     """Execute the full pipeline for a session, emitting progress events."""
     query, mode_enum = session.query, session.mode
+    context = session.context
     mode = get_mode(mode_enum)
     started = time.monotonic()
 
@@ -65,7 +89,7 @@ async def run_research(session: ResearchSession) -> ResearchResult:
         )
 
     # --- Short-circuit on cached result ---
-    cached = await cache.get(_cache_key(query, mode_enum))
+    cached = await cache.get(_cache_key(query, mode_enum, context))
     if cached is not None:
         result = ResearchResult(**cached)
         result.id = session.id
@@ -82,11 +106,17 @@ async def run_research(session: ResearchSession) -> ResearchResult:
     try:
         # --- 1. Understanding ---
         emit(ProgressStage.understanding, "Understanding your question", 0.05)
-        queries = [query]
-        extra = await _expand_query(query, mode.expansions)
+        search_seed = await _standalone_query(query, context)
+        queries = [search_seed]
+        extra = await _expand_query(search_seed, mode.expansions)
         queries.extend(extra)
-        if extra:
-            emit(ProgressStage.understanding, "Expanded the query", 0.1, subqueries=extra)
+        if extra or search_seed != query:
+            emit(
+                ProgressStage.understanding,
+                "Expanded the query",
+                0.1,
+                subqueries=([search_seed] if search_seed != query else []) + extra,
+            )
 
         # --- 2. Searching ---
         emit(ProgressStage.searching, "Searching the web", 0.2)
@@ -130,7 +160,7 @@ async def run_research(session: ResearchSession) -> ResearchResult:
 
         # --- 6. Ranking ---
         emit(ProgressStage.ranking, "Ranking evidence by relevance", 0.8)
-        sources: list[Source] = rank_pages(query, unique, mode)
+        sources: list[Source] = rank_pages(search_seed, unique, mode)
         session.emit(
             ProgressEvent(
                 stage=ProgressStage.ranking, status="done", message="Ranked sources",
@@ -151,7 +181,9 @@ async def run_research(session: ResearchSession) -> ResearchResult:
             )
 
         t_answer = time.monotonic()
-        answer, model_info = await generate_answer(query, mode, sources, on_delta)
+        answer, model_info = await generate_answer(
+            query, mode, sources, on_delta, context=context
+        )
         answer_ms = int((time.monotonic() - t_answer) * 1000)
 
         # --- 8. Verifying citations ---
@@ -178,7 +210,7 @@ async def run_research(session: ResearchSession) -> ResearchResult:
             created_at=datetime.now(UTC).isoformat(),
         )
         await cache.set(
-            _cache_key(query, mode_enum), result.model_dump(mode="json"),
+            _cache_key(query, mode_enum, context), result.model_dump(mode="json"),
             ttl=settings.cache_ttl_research,
         )
         session.emit(

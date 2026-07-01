@@ -25,7 +25,7 @@ _SSE_HEADERS = {
 
 @router.post("/research", response_model=ResearchCreated, dependencies=[Depends(rate_limit)])
 async def create_research(req: ResearchRequest) -> ResearchCreated:
-    session = sessions.create(req.query, req.mode)
+    session = sessions.create(req.query, req.mode, context=req.context)
     task = asyncio.create_task(run_research(session))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
