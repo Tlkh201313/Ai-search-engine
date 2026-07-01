@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { getResearch, openResearchStream } from '@/lib/api';
+import { ApiError, getResearch, openResearchStream } from '@/lib/api';
 import { STAGE_ORDER } from '@/lib/modes';
 import type {
   ProgressStage,
@@ -64,6 +64,7 @@ export function useResearch(
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    let close: (() => void) | undefined;
 
     if (!opts.live) {
       // Reloaded / shared link: load the finished result.
@@ -74,14 +75,19 @@ export function useResearch(
             status: result.status === 'error' ? 'error' : 'complete',
             stage: 'done',
             progress: 1,
-            sources: result.sources,
+            sources: result.sources ?? [],
             result,
-            answerText: result.answer.detail,
+            answerText: result.answer?.detail ?? '',
             error: result.error,
             stageStatus: Object.fromEntries(STAGE_ORDER.map((st) => [st, 'done'])),
           }));
         })
         .catch((err: Error) => {
+          if (err instanceof ApiError && err.status === 202) {
+            // Still running — re-attach to the live stream instead.
+            close = attach();
+            return;
+          }
           setState((s) => ({
             ...s,
             status: 'error',
@@ -90,10 +96,17 @@ export function useResearch(
               'This research session has expired. Run the query again to refresh it.',
           }));
         });
-      return;
+      return () => close?.();
     }
 
-    const close = openResearchStream(id, {
+    close = attach();
+    return () => close?.();
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  function attach() {
+    return openResearchStream(id, {
       onEvent: (event) => {
         setState((prev) => {
           if (event.data?.heartbeat) return prev;
@@ -118,7 +131,7 @@ export function useResearch(
             const result = event.data.result;
             next.result = result;
             next.sources = result.sources.length ? result.sources : next.sources;
-            next.answerText = result.answer.detail || next.answerText;
+            next.answerText = result.answer?.detail || next.answerText;
             next.status = result.status === 'error' ? 'error' : 'complete';
             next.error = result.error;
             if (event.stage === 'done')
@@ -137,10 +150,7 @@ export function useResearch(
         );
       },
     });
-
-    return close;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }
 
   return state;
 }

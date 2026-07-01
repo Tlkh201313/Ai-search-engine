@@ -7,29 +7,29 @@
   --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
 
-  /* Light — warm paper */
-  --paper: 249 248 244;
+  /* Light — paper white / true turquoise */
+  --paper: 252 252 249;
   --surface: 255 255 255;
-  --raised: 255 255 255;
-  --ink: 28 27 24;
-  --muted: 92 88 80;
-  --faint: 140 135 125;
-  --line: 231 227 219;
-  --accent: 176 98 38; /* warm clay */
-  --accent-soft: 244 233 222;
+  --raised: 243 243 238;
+  --ink: 19 52 59;
+  --muted: 100 106 106;
+  --faint: 144 150 150;
+  --line: 232 232 227;
+  --accent: 32 128 141;
+  --accent-soft: 226 240 241;
 }
 
 .dark {
-  /* Dark — warm near-black */
-  --paper: 21 20 17;
-  --surface: 28 27 23;
-  --raised: 33 32 27;
-  --ink: 237 233 224;
-  --muted: 165 159 147;
-  --faint: 122 117 106;
-  --line: 46 44 38;
-  --accent: 217 160 102; /* warm sand */
-  --accent-soft: 48 42 33;
+  /* Dark — offblack / cyan */
+  --paper: 25 26 26;
+  --surface: 32 34 34;
+  --raised: 40 42 42;
+  --ink: 232 232 230;
+  --muted: 164 166 165;
+  --faint: 130 133 133;
+  --line: 48 50 50;
+  --accent: 32 184 205;
+  --accent-soft: 26 51 56;
 }
 
 * {
@@ -88,10 +88,10 @@ body {
   }
 }
 
-/* Readable answer typography (Claude-inspired calm serif reading) */
+/* Readable answer typography */
 .answer-prose {
-  font-family: var(--font-serif);
-  font-size: 1.0625rem;
+  font-family: var(--font-sans);
+  font-size: 1rem;
   line-height: 1.75;
   color: rgb(var(--ink));
 }

@@ -12,7 +12,6 @@ import json
 from app.fetch import fetch_page
 from app.logging import get_logger
 from app.models import Source, SourceScores
-from app.research.rank import build_excerpt
 from app.search import multi_search
 from app.textutil import domain_of, jaccard, keywords, normalize_url
 
@@ -68,6 +67,9 @@ class SourceCollector:
         self.tool_reads = 0
 
     def add_page(self, page) -> Source:
+        # Imported lazily to avoid a tools <-> research import cycle at module load.
+        from app.research.rank import build_excerpt
+
         norm = normalize_url(page.url)
         if norm in self._seen:
             return self._seen[norm]

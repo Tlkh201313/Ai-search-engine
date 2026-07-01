@@ -104,7 +104,7 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
       {/* Direct answer */}
       {answer?.summary && (
         <div className="mb-5 border-l-2 border-accent/50 pl-4">
-          <p className="font-serif text-lg leading-relaxed text-ink">{answer.summary}</p>
+          <p className="text-lg leading-relaxed text-ink">{answer.summary}</p>
         </div>
       )}
 
@@ -187,8 +187,12 @@ export function AnswerView({ state, onCite, onFollowUp, mode }: Props) {
           {result && (
             <div className="mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-4 text-xs text-faint">
               <span className={cn('font-medium', conf.tone)}>{conf.label}</span>
-              <span>·</span>
-              <span>{sources.length} sources</span>
+              {sources.length > 0 && (
+                <>
+                  <span>·</span>
+                  <span>{sources.length} sources</span>
+                </>
+              )}
               {result.timings.total_ms > 0 && (
                 <>
                   <span>·</span>

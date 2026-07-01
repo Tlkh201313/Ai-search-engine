@@ -20,8 +20,12 @@ async def search(query: str, limit: int, client: httpx.AsyncClient) -> list[Sear
         "format": "json",
         "srprop": "snippet|timestamp",
     }
+    # Wikimedia's UA policy 403s generic bot strings; use a descriptive UA with a
+    # contact URL as they require.
     resp = await client.get(
-        _API, params=params, headers={"User-Agent": "AIResearchEngine/1.0"}
+        _API,
+        params=params,
+        headers={"User-Agent": "Lumen-Research/1.0 (+https://github.com/lumen; grounded research engine)"},
     )
     resp.raise_for_status()
     data = resp.json()

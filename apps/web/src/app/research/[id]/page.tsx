@@ -1,22 +1,17 @@
 'use client';
 
-import { Library } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatInput } from '@/components/ChatInput';
-import { SourceDrawer } from '@/components/SourceDrawer';
-import { SourcePanel } from '@/components/SourcePanel';
-import { TopBar } from '@/components/TopBar';
 import { Turn, type TurnData } from '@/components/Turn';
 import type { ResearchState } from '@/hooks/useResearch';
 import { ApiError, createResearch, type ConversationTurn } from '@/lib/api';
 import { addRecent, takePending } from '@/lib/history';
 import { DEFAULT_PERSONA } from '@/lib/personas';
-import type { Persona, ResearchMode, Source } from '@/lib/types';
+import type { Persona, ResearchMode } from '@/lib/types';
 
 interface TurnSummary {
-  sources: Source[];
   status: ResearchState['status'];
   query: string;
   answer: string;
@@ -28,9 +23,6 @@ export default function ResearchPage() {
 
   const [turns, setTurns] = useState<TurnData[]>([]);
   const [summaries, setSummaries] = useState<Record<string, TurnSummary>>({});
-  const [activeTurnId, setActiveTurnId] = useState<string>(id);
-  const [highlightId, setHighlightId] = useState<number | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [mode, setMode] = useState<ResearchMode>('quick');
   const [persona, setPersona] = useState<Persona>(DEFAULT_PERSONA);
   const [busy, setBusy] = useState(false);
@@ -51,7 +43,6 @@ export default function ResearchPage() {
         ? { id, query: pending.query, mode: pending.mode, live: true }
         : { id, query: '', mode: 'quick', live: false },
     ]);
-    setActiveTurnId(id);
     if (pending) {
       setMode(pending.mode);
       setPersona(pending.persona);
@@ -61,46 +52,14 @@ export default function ResearchPage() {
   const handleState = useCallback((turnId: string, state: ResearchState) => {
     setSummaries((prev) => {
       const existing = prev[turnId];
-      const answer = state.result?.answer.summary ?? '';
+      const answer = state.result?.answer?.summary || state.result?.answer?.detail || '';
       const query = state.result?.query ?? existing?.query ?? '';
-      if (
-        existing &&
-        existing.status === state.status &&
-        existing.sources === state.sources &&
-        existing.answer === answer
-      ) {
+      if (existing && existing.status === state.status && existing.answer === answer) {
         return prev;
       }
-      return {
-        ...prev,
-        [turnId]: { sources: state.sources, status: state.status, query, answer },
-      };
+      return { ...prev, [turnId]: { status: state.status, query, answer } };
     });
   }, []);
-
-  const scrollToSource = useCallback((sid: number) => {
-    const desktop = window.matchMedia('(min-width: 1024px)').matches;
-    if (!desktop) setDrawerOpen(true);
-    window.setTimeout(
-      () => {
-        const prefix = desktop ? 'desk' : 'draw';
-        document
-          .getElementById(`${prefix}-source-${sid}`)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      },
-      desktop ? 0 : 90,
-    );
-  }, []);
-
-  const handleCite = useCallback(
-    (turnId: string, sid: number) => {
-      setActiveTurnId(turnId);
-      setHighlightId(sid);
-      scrollToSource(sid);
-      window.setTimeout(() => setHighlightId(null), 2200);
-    },
-    [scrollToSource],
-  );
 
   const handleFollowUp = useCallback(
     async (query: string, m: ResearchMode, p?: Persona) => {
@@ -118,7 +77,6 @@ export default function ResearchPage() {
         const { id: newId } = await createResearch(query, m, chosen, context);
         addRecent({ id: newId, query, mode: m, ts: Date.now() });
         setTurns((prev) => [...prev, { id: newId, query, mode: m, live: true }]);
-        setActiveTurnId(newId);
         setMode(m);
         setPersona(chosen);
         window.setTimeout(
@@ -136,78 +94,32 @@ export default function ResearchPage() {
     [],
   );
 
-  const active = summaries[activeTurnId];
-  const activeSources = active?.sources ?? [];
-  const activeLoading = active?.status === 'running' || active?.status === 'connecting';
-
   return (
-    <div className="flex min-h-dvh flex-col">
-      <TopBar />
-
-      <div className="mx-auto grid w-full max-w-6xl flex-1 gap-8 px-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        {/* Conversation */}
-        <div className="min-w-0 py-8">
-          <div className="space-y-8">
-            {turns.map((t) => (
-              <Turn
-                key={t.id}
-                turn={t}
-                onState={handleState}
-                onCite={handleCite}
-                onFollowUp={handleFollowUp}
-              />
-            ))}
-          </div>
-
-          {/* Sticky follow-up input */}
-          <div className="sticky bottom-0 z-10 mt-6">
-            <div className="bg-gradient-to-t from-paper via-paper to-transparent pb-4 pt-8">
-              {followError && (
-                <p className="mb-2 text-center text-xs text-red-500">{followError}</p>
-              )}
-              <ChatInput
-                onSubmit={handleFollowUp}
-                mode={mode}
-                onModeChange={setMode}
-                persona={persona}
-                onPersonaChange={setPersona}
-                busy={busy}
-              />
-            </div>
-          </div>
+    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 sm:px-6">
+      <div className="flex-1 py-8">
+        <div className="space-y-10">
+          {turns.map((t) => (
+            <Turn key={t.id} turn={t} onState={handleState} onFollowUp={handleFollowUp} />
+          ))}
         </div>
-
-        {/* Desktop source panel */}
-        <aside className="hidden lg:block">
-          <div className="scroll-slim sticky top-20 max-h-[calc(100dvh-6rem)] overflow-y-auto pb-8">
-            <SourcePanel
-              sources={activeSources}
-              loading={activeLoading}
-              highlightId={highlightId}
-              anchorPrefix="desk"
-            />
-          </div>
-        </aside>
       </div>
 
-      {/* Mobile sources trigger */}
-      {activeSources.length > 0 && (
-        <button
-          type="button"
-          onClick={() => setDrawerOpen(true)}
-          className="fixed bottom-28 right-4 z-30 flex items-center gap-2 rounded-full border border-line bg-raised px-4 py-2.5 text-sm font-medium text-ink shadow-float lg:hidden"
-        >
-          <Library className="h-4 w-4 text-accent" />
-          {activeSources.length} sources
-        </button>
-      )}
-
-      <SourceDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        sources={activeSources}
-        highlightId={highlightId}
-      />
+      {/* Sticky follow-up input */}
+      <div className="sticky bottom-0 z-10">
+        <div className="bg-gradient-to-t from-paper via-paper to-transparent pb-4 pt-8">
+          {followError && (
+            <p className="mb-2 text-center text-xs text-red-500">{followError}</p>
+          )}
+          <ChatInput
+            onSubmit={handleFollowUp}
+            mode={mode}
+            onModeChange={setMode}
+            persona={persona}
+            onPersonaChange={setPersona}
+            busy={busy}
+          />
+        </div>
+      </div>
     </div>
   );
 }

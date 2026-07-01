@@ -45,9 +45,9 @@ class Settings(BaseSettings):
     searxng_url: str = ""
 
     # --- Fetch ---
-    fetch_timeout: float = 12.0
+    fetch_timeout: float = 10.0
     fetch_max_chars: int = 12000
-    fetch_concurrency: int = 6
+    fetch_concurrency: int = 10
     allow_private_ips: bool = False
 
     # --- LLM (single server-hosted gateway; multiple models behind one URL) ---
@@ -57,12 +57,13 @@ class Settings(BaseSettings):
     llm_api_key: str = ""  # operator sets this (a dummy value is fine); empty => extractive
     llm_api_style: str = "openai"
     llm_max_tokens: int = 2048
-    llm_timeout: float = 90.0
+    llm_timeout: float = 60.0
     llm_anthropic_version: str = "2023-06-01"
     # Persona used when the request does not specify one.
     default_persona: str = "lunar"
-    # Max tool-call rounds the model may take per answer.
-    llm_max_tool_rounds: int = 4
+    # Max tool-call rounds the model may take while gathering evidence, before
+    # the final (streamed) synthesis pass. Kept low to bound worst-case latency.
+    llm_max_tool_rounds: int = 3
 
     @field_validator("cors_origins", "search_providers", mode="before")
     @classmethod

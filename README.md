@@ -132,6 +132,14 @@ Open http://localhost:3000.
 That's it — the app is fully functional in **extractive mode** (answers quoted
 directly from ranked sources) with no API keys.
 
+### One command (Windows)
+
+From the repo root, `./dev.ps1` starts both servers (backend via `python -m app`,
+which honors `API_PORT`, plus `pnpm dev`) in separate windows. The backend
+defaults to **port 8001** here because `8000` is frequently taken by Docker
+Desktop or other local services — keep `NEXT_PUBLIC_API_URL` in
+`apps/web/.env.local` pointed at the same port.
+
 ## Enabling synthesized answers (one hosted gateway, several models)
 
 Lumen talks to **one** server-owned gateway that serves several models behind
@@ -228,8 +236,16 @@ Or use the root **Makefile**: `make api-install`, `make api-test`, `make web-dev
 
 - **“Running in extractive mode.”** No model is configured — set `LLM_BASE_URL` /
   `LLM_API_KEY`. This is expected and not an error.
-- **“Can't reach the API.”** Start the backend and confirm `NEXT_PUBLIC_API_URL`
-  in `apps/web/.env.local` matches it.
+- **“Can't reach the API.”** The backend isn't running, or something else owns
+  its port. `8000` is often taken (Docker Desktop, another app), so the backend
+  defaults to **8001** here — confirm `NEXT_PUBLIC_API_URL` in
+  `apps/web/.env.local` matches `API_PORT` in `apps/api/.env`, then start the
+  backend (`./dev.ps1`, or `python -m app` from `apps/api`).
+- **TLS “certificate verify failed” / 0 sources / stuck in extractive mode.**
+  Some hosts ship an incomplete certificate chain that OpenSSL can't complete but
+  browsers can. Lumen routes verification through the OS trust store via
+  `truststore` (installed from `requirements.txt`) to fix this without weakening
+  verification.
 - **Searches return 0 sources.** Your network may block search engines, or a
   provider is rate-limited. Add `SEARXNG_URL` and switch `SEARCH_PROVIDERS`.
 - **Fetch says “blocked”.** SSRF protection blocked a private/loopback address.

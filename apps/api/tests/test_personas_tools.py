@@ -25,7 +25,8 @@ def test_personas_registry():
     assert personas[0].tier == 1  # Solstice strongest
     # Zephyr is a fusion; others are single-model.
     assert get_persona("zephyr").fusion is not None
-    assert get_persona("solstice").model == "claude-opus"
+    # Solstice is a single-model persona (a model id is set, no fusion).
+    assert get_persona("solstice").model and get_persona("solstice").fusion is None
     # System prompts are distinct and non-trivial, and hide the model identity.
     prompts = {p.name: p.system_prompt for p in personas}
     assert len({*prompts.values()}) == 4
@@ -142,8 +143,9 @@ async def test_fusion_persona_runs_and_cites(monkeypatch):
     )
     assert info.model == "Zephyr" and info.grounded is True
     assert 1 in ans.citations
-    # Fusion used both the executor (llama) and the planner/checker (haiku) models.
-    assert "llama-4-maverick" in seen_models and "claude-3-haiku" in seen_models
+    # Fusion used both the executor and the planner/checker models it's configured with.
+    executor, planner_checker = get_persona("zephyr").fusion
+    assert executor in seen_models and planner_checker in seen_models
 
 
 @pytest.mark.asyncio

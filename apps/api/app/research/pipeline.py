@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
 import time
 from datetime import UTC, datetime
 
@@ -30,6 +32,119 @@ from app.research.session import ResearchSession
 from app.search import multi_search
 
 log = get_logger("research")
+
+
+# --------------------------------------------------------------------------- #
+#  Chat fast path: plain conversation skips search/fetch/rank entirely
+# --------------------------------------------------------------------------- #
+# ponytail: regex pre-filter + one-word LLM router; add embeddings if it misroutes
+_SEARCH_RE = re.compile(
+    r"\b(search|research|find|look ?up|latest|news|today|current|recent|update[sd]?|"
+    r"price|weather|stock|score|release[sd]?|announce[sd]?|20\d\d|vs\.?|versus|"
+    r"who (won|is the)|what happened)\b",
+    re.I,
+)
+_CHAT_RE = re.compile(
+    r"^(hi|hello|hey|yo|sup|thanks?( you)?|thank you|ok(ay)?|cool|nice|lol|"
+    r"good (morning|afternoon|evening|night)|how are you|who are you|what are you|"
+    r"what can you do|help)\b",
+    re.I,
+)
+
+
+async def _needs_search(query: str, context: list[ConversationTurn]) -> bool:
+    q = query.strip()
+    if _SEARCH_RE.search(q):
+        return True
+    if _CHAT_RE.match(q) and len(q) <= 80:
+        return False
+    if not llm.available():
+        return True  # extractive fallback needs sources
+    prompt = (
+        "Classify the user message. Reply with exactly one word.\n"
+        "SEARCH — needs live web sources (facts about the world, products, events, "
+        "docs, anything that benefits from citations).\n"
+        "CHAT — greeting, small talk, opinion, writing/coding help, math, or general "
+        "knowledge you can answer well without searching.\n\n"
+        f'Message: "{q[:500]}"'
+    )
+    try:
+        text = await llm.chat([{"role": "user", "content": prompt}], temperature=0.0)
+    except LLMError:
+        return True
+    return not text.strip().upper().startswith("CHAT")
+
+
+async def _run_chat(session: ResearchSession, started: float) -> ResearchResult:
+    """Answer conversationally with the persona's model. No search, no citations."""
+    from app.llm.personas import chat_model, chat_system, get_persona
+    from app.research.answer import _stream_or_chat
+
+    persona = get_persona(session.persona)
+
+    def emit(stage: ProgressStage, message: str, progress: float, **data) -> None:
+        session.emit(
+            ProgressEvent(stage=stage, status="active", message=message, progress=progress, data=data)
+        )
+
+    emit(ProgressStage.writing, "Answering", 0.3)
+
+    async def on_delta(text: str) -> None:
+        session.emit(
+            ProgressEvent(
+                stage=ProgressStage.writing, status="active", message="",
+                progress=0.7, data={"delta": text},
+            )
+        )
+
+    messages: list[dict] = []
+    for turn in session.context[-6:]:
+        messages.append({"role": "user", "content": turn.query})
+        if turn.answer:
+            messages.append({"role": "assistant", "content": turn.answer})
+    messages.append({"role": "user", "content": session.query})
+
+    grounded = llm.available()
+    if grounded:
+        try:
+            text = await _stream_or_chat(
+                messages, chat_model(persona), chat_system(persona), on_delta, temperature=0.6
+            )
+        except LLMError as exc:
+            log.warning("chat answer failed: %s", exc)
+            text, grounded = "", False
+    else:
+        text = ""
+    if not text.strip():
+        text = (
+            "No language model is configured, so I can't chat directly. "
+            "Try a research query instead — search and extraction still work."
+        )
+
+    from app.models import Answer
+
+    total_ms = int((time.monotonic() - started) * 1000)
+    result = ResearchResult(
+        id=session.id,
+        query=session.query,
+        mode=session.mode,
+        persona=session.persona,
+        status="complete",
+        answer=Answer(detail=text, confidence=0.9 if grounded else 0.0),
+        sources=[],
+        confidence=0.9 if grounded else 0.0,
+        model=ModelInfo(model=persona.name, available=llm.available(), grounded=grounded),
+        timings=ResearchTimings(answer_ms=total_ms, total_ms=total_ms),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    session.emit(
+        ProgressEvent(
+            stage=ProgressStage.done, status="done", message="Complete", progress=1.0,
+            data={"result": result.model_dump(mode="json")},
+        )
+    )
+    session.finish(result)
+    return result
 
 
 async def _standalone_query(query: str, context: list[ConversationTurn]) -> str:
@@ -104,12 +219,23 @@ async def run_research(session: ResearchSession) -> ResearchResult:
         return result
 
     try:
-        # --- 1. Understanding ---
+        # --- 0. Route: plain chat skips the whole research pipeline ---
         emit(ProgressStage.understanding, "Understanding your question", 0.05)
+        if not await _needs_search(query, context):
+            return await _run_chat(session, started)
+
+        # --- 1. Understanding ---
         search_seed = await _standalone_query(query, context)
-        queries = [search_seed]
+
+        # --- 2. Searching ---
+        # Fire the seed search immediately and generate query expansions in
+        # parallel, so the (LLM) expansion call overlaps with the first search
+        # round instead of blocking it.
+        t_search = time.monotonic()
+        seed_task = asyncio.create_task(
+            multi_search([search_seed], providers=settings.search_providers, limit=mode.search_limit)
+        )
         extra = await _expand_query(search_seed, mode.expansions)
-        queries.extend(extra)
         if extra or search_seed != query:
             emit(
                 ProgressStage.understanding,
@@ -118,12 +244,13 @@ async def run_research(session: ResearchSession) -> ResearchResult:
                 subqueries=([search_seed] if search_seed != query else []) + extra,
             )
 
-        # --- 2. Searching ---
         emit(ProgressStage.searching, "Searching the web", 0.2)
-        t_search = time.monotonic()
-        raw_results = await multi_search(
-            queries, providers=settings.search_providers, limit=mode.search_limit
+        extra_results = (
+            await multi_search(extra, providers=settings.search_providers, limit=mode.search_limit)
+            if extra
+            else []
         )
+        raw_results = (await seed_task) + extra_results
         search_ms = int((time.monotonic() - t_search) * 1000)
 
         # --- 3. Finding sources (dedupe search hits) ---

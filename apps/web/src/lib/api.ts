@@ -11,7 +11,8 @@ export const API_BASE = (
 ).replace(/\/$/, '');
 
 async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) {
+  // 202 = still running: body is {detail}, not the result — never parse it as one.
+  if (!res.ok || res.status === 202) {
     let detail = res.statusText;
     try {
       const body = await res.json();

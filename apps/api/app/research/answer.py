@@ -67,15 +67,19 @@ async def generate_answer(
     if llm.available():
         try:
             if persona.fusion:
-                final_text, collector = await _fusion_answer(query, mode, sources, context, persona)
+                final_text, collector = await _fusion_answer(
+                    query, mode, sources, context, persona, on_delta
+                )
             else:
                 collector = SourceCollector(sources, query)
-                final_text = await _run_agent(
+                draft = await _gather(
                     query, mode, collector, context, persona.model or "", persona.system_prompt
                 )
+                final_text = await _synthesize(
+                    query, mode, collector, context, persona.model or "",
+                    persona.system_prompt, draft, on_delta,
+                )
             answer, info = _finalize(final_text, collector, persona)
-            if on_delta:
-                await on_delta(answer.detail)
             return answer, info, collector.sources
         except LLMError as exc:
             log.warning("persona '%s' failed, using extractive fallback: %s", persona.key, exc)
@@ -87,9 +91,9 @@ async def generate_answer(
 
 
 # --------------------------------------------------------------------------- #
-#  Agentic tool loop (single model)
+#  Agentic tool loop (evidence gathering, single model, no streaming)
 # --------------------------------------------------------------------------- #
-async def _run_agent(
+async def _gather(
     query: str,
     mode: ModeConfig,
     collector: SourceCollector,
@@ -98,7 +102,11 @@ async def _run_agent(
     system: str,
     extra_system: str = "",
 ) -> str:
-    """Run one model with tools until it produces a final answer."""
+    """Let the model read the given sources and call tools to fill gaps.
+
+    Returns the model's draft answer if it produced one before the tool budget
+    ran out (used as notes for the streamed synthesis); otherwise ``""``.
+    """
     full_system = system if not extra_system else f"{system}\n\n{extra_system}"
     messages: list[dict] = [
         {"role": "user", "content": _build_user_prompt(query, mode, collector.sources, context)}
@@ -108,7 +116,7 @@ async def _run_agent(
     for _ in range(settings.llm_max_tool_rounds):
         res = await llm.chat(messages, model=model, system=full_system, tools=tools, temperature=0.2)
         if not res.tool_calls:
-            return res.content
+            return res.content  # model is done gathering; keep its draft as notes
         messages.append(
             {"role": "assistant", "content": res.content or "", "tool_calls": [tc.raw for tc in res.tool_calls]}
         )
@@ -116,16 +124,74 @@ async def _run_agent(
             output = await execute_tool(call.name, call.arguments, collector)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
-    # Tool budget exhausted — force a final answer without tools.
-    messages.append(
-        {"role": "user", "content": "Stop using tools. Write the final answer now in the required template."}
-    )
-    res = await llm.chat(messages, model=model, system=full_system, tools=None, temperature=0.2)
+    return ""  # budget exhausted without a draft — synthesize straight from sources
+
+
+_SYNTH_INSTRUCTION = (
+    "Do not call any tools now. Using only the numbered sources above (every source "
+    "you read is listed), write the final answer in the required markdown template. "
+    "Cite every non-obvious claim inline with [n] using only ids that exist above."
+)
+
+
+async def _synthesize(
+    query: str,
+    mode: ModeConfig,
+    collector: SourceCollector,
+    context: list[ConversationTurn],
+    model: str,
+    system: str,
+    draft: str,
+    on_delta: DeltaCallback | None,
+) -> str:
+    """Stream the final, tool-free synthesis over all collected sources."""
+    lines = [_build_user_prompt(query, mode, collector.sources, context), ""]
+    if draft.strip():
+        lines += ["Your working draft / notes (revise and finalize):", draft, ""]
+    lines.append(_SYNTH_INSTRUCTION)
+    messages = [{"role": "user", "content": "\n".join(lines)}]
+    return await _stream_or_chat(messages, model, system, on_delta, temperature=0.2)
+
+
+# --------------------------------------------------------------------------- #
+#  Streaming helper
+# --------------------------------------------------------------------------- #
+async def _stream_or_chat(
+    messages: list[dict],
+    model: str,
+    system: str,
+    on_delta: DeltaCallback | None,
+    temperature: float = 0.2,
+) -> str:
+    """Stream a completion to ``on_delta`` and return the full text.
+
+    Falls back to a single non-streaming call if streaming is unavailable or
+    yields nothing, so the answer is never lost.
+    """
+    if on_delta is None:
+        res = await llm.chat(messages, model=model, system=system, temperature=temperature)
+        return res.content
+
+    chunks: list[str] = []
+    try:
+        async for piece in llm.stream(messages, model=model, system=system, temperature=temperature):
+            chunks.append(piece)
+            await on_delta(piece)
+    except LLMError as exc:
+        log.info("stream failed, falling back to non-stream: %s", exc)
+
+    text = "".join(chunks)
+    if text.strip():
+        return text
+
+    res = await llm.chat(messages, model=model, system=system, temperature=temperature)
+    if res.content:
+        await on_delta(res.content)
     return res.content
 
 
 # --------------------------------------------------------------------------- #
-#  Zephyr fusion: plan (haiku) → execute (llama, tools) → check (haiku)
+#  Zephyr fusion: plan (haiku) → execute (llama, tools) → check/stream (haiku)
 # --------------------------------------------------------------------------- #
 async def _fusion_answer(
     query: str,
@@ -133,6 +199,7 @@ async def _fusion_answer(
     sources: list[Source],
     context: list[ConversationTurn],
     persona: Persona,
+    on_delta: DeltaCallback | None = None,
 ) -> tuple[str, SourceCollector]:
     assert persona.fusion and persona.fusion_prompts
     executor_model, planner_model = persona.fusion
@@ -153,26 +220,29 @@ async def _fusion_answer(
     except LLMError as exc:
         log.info("fusion planner skipped: %s", exc)
 
-    # 2) EXECUTE (capable fast model, with tools).
+    # 2) EXECUTE (capable fast model, with tools) — gather evidence + a draft.
     extra = f"Research plan to follow:\n{plan}" if plan else ""
-    draft = await _run_agent(query, mode, collector, context, executor_model, executor_p, extra)
+    draft = await _gather(query, mode, collector, context, executor_model, executor_p, extra)
 
-    # 3) CHECK (fast model, no tools) — verify + fix; fall back to the draft.
-    try:
-        numbered = "\n".join(
-            f"[{s.id}] {s.title} ({s.domain})\n{s.excerpt or s.snippet}" for s in collector.sources
+    # 3) CHECK (fast model, no tools) — verify + fix, streamed. If the executor
+    #    produced no draft, synthesize one directly instead.
+    if not draft.strip():
+        final = await _synthesize(
+            query, mode, collector, context, executor_model, executor_p, "", on_delta
         )
-        check_res = await llm.chat(
-            [{"role": "user", "content": f"Question: {query}\n\nDraft answer:\n{draft}\n\nSources:\n{numbered}"}],
-            model=planner_model,
-            system=checker_p,
-            temperature=0.1,
-        )
-        final = check_res.content.strip()
-        return (final or draft), collector
-    except LLMError as exc:
-        log.info("fusion checker skipped: %s", exc)
-        return draft, collector
+        return final, collector
+
+    numbered = "\n".join(
+        f"[{s.id}] {s.title} ({s.domain})\n{s.excerpt or s.snippet}" for s in collector.sources
+    )
+    check_user = (
+        f"Question: {query}\n\nDraft answer:\n{draft}\n\nSources:\n{numbered}\n\n"
+        "Return the corrected FINAL answer in the required template."
+    )
+    final = await _stream_or_chat(
+        [{"role": "user", "content": check_user}], planner_model, checker_p, on_delta, temperature=0.1
+    )
+    return (final or draft), collector
 
 
 # --------------------------------------------------------------------------- #

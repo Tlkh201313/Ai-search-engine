@@ -4,8 +4,11 @@ Each persona is a named research intelligence with its own character and a
 system prompt scaled to its tier. Personas never reveal the underlying model.
 One persona (Zephyr) is a two-model fusion: a planner/checker plus an executor.
 
-Model ids map to the hosted gateway (homelander.ca):
-    claude-opus, claude-4-sonnet, claude-3-haiku, llama-4-maverick, kimni-k2-5
+Model ids map to whatever the configured gateway's /v1/models exposes. For the
+current gateway they are:
+    pro/anthropic/claude-opus-4.7, claude-sonnet-4-6, pro/moonshotai/kimi-k2.6,
+    pro/deepseek/deepseek-v4-pro, pro/deepseek/deepseek-v4-flash
+Change these to match your gateway (curl {base}/v1/models to list them).
 """
 
 from __future__ import annotations
@@ -178,7 +181,7 @@ _PERSONAS: dict[str, Persona] = {
         name="Solstice",
         tagline="Deepest reasoning and verification",
         tier=1,
-        model="claude-opus",
+        model="pro/anthropic/claude-opus-4.7",
         system_prompt=_SOLSTICE,
     ),
     "lunar": Persona(
@@ -186,7 +189,7 @@ _PERSONAS: dict[str, Persona] = {
         name="Lunar",
         tagline="Balanced, reliable, fast enough",
         tier=2,
-        model="claude-4-sonnet",
+        model="claude-sonnet-4-6",
         system_prompt=_LUNAR,
     ),
     "tellus": Persona(
@@ -194,7 +197,7 @@ _PERSONAS: dict[str, Persona] = {
         name="Tellus",
         tagline="Practical and grounded",
         tier=3,
-        model="kimni-k2-5",
+        model="pro/moonshotai/kimi-k2.6",
         system_prompt=_TELLUS,
     ),
     "zephyr": Persona(
@@ -203,7 +206,8 @@ _PERSONAS: dict[str, Persona] = {
         tagline="Fast dual-model fusion (plan · execute · check)",
         tier=4,
         model=None,
-        fusion=("llama-4-maverick", "claude-3-haiku"),
+        # (executor with tools, planner/checker) — both fast models on the gateway.
+        fusion=("pro/deepseek/deepseek-v4-pro", "pro/deepseek/deepseek-v4-flash"),
         fusion_prompts=(_ZEPHYR_PLANNER, _ZEPHYR_EXECUTOR, _ZEPHYR_CHECKER),
         system_prompt=_ZEPHYR_EXECUTOR,
     ),
@@ -222,3 +226,19 @@ def get_persona(key: str | None) -> Persona:
 
 def all_personas() -> list[Persona]:
     return [_PERSONAS[k] for k in DEFAULT_ORDER]
+
+
+def chat_system(persona: Persona) -> str:
+    """Lightweight conversational system prompt (no tools, no citation template)."""
+    return _compose(
+        _identity(persona.name, "a helpful, knowledgeable assistant."),
+        "This is a casual conversation, not a research task. Answer directly and "
+        "conversationally in clean markdown. Be accurate and concise. Do not use [n] "
+        "citations or any section template. If the question genuinely needs fresh web "
+        "information, answer what you can and note that a web search would confirm it.",
+    )
+
+
+def chat_model(persona: Persona) -> str:
+    """Model to use for plain chat: the persona's model, or its fast fusion model."""
+    return persona.model or (persona.fusion[1] if persona.fusion else "")

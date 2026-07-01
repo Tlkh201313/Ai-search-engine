@@ -20,7 +20,10 @@ from app.textutil import domain_of
 
 log = get_logger("fetch")
 
-_MAX_RETRIES = 2
+# One retry only: a page that fails within the timeout twice rarely succeeds a
+# third time, and we always over-fetch candidates — so dropping a straggler keeps
+# the "reading" stage fast without hurting answer quality.
+_MAX_RETRIES = 1
 _MAX_REDIRECTS = 4
 _MAX_BYTES = 2_500_000  # cap a single page download at ~2.5 MB
 

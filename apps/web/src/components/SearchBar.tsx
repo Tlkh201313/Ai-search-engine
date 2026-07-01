@@ -79,7 +79,7 @@ export function SearchBar({
             ref={textareaRef}
             value={query}
             rows={1}
-            placeholder="Ask anything — get a grounded, cited answer…"
+            placeholder="Ask anything…"
             onChange={(e) => {
               setQuery(e.target.value);
               grow();

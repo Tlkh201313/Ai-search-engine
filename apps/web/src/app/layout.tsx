@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 
 import { Providers } from '@/components/Providers';
+import { Sidebar } from '@/components/Sidebar';
 
 import './globals.css';
 
@@ -25,7 +26,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-dvh antialiased">
-        <Providers>{children}</Providers>
+        <Providers>
+          <div className="flex min-h-dvh flex-col md:flex-row">
+            <Sidebar />
+            <main className="min-w-0 flex-1">{children}</main>
+          </div>
+        </Providers>
       </body>
     </html>
   );
