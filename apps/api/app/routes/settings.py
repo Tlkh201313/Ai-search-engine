@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.config import settings
-from app.llm import llm
-from app.models import ResearchMode, SettingsPublic, SettingsUpdate
+from app.llm import all_personas, llm
+from app.models import PersonaInfo, ResearchMode, SettingsPublic, SettingsUpdate
 from app.search.base import PROVIDERS
 
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -15,8 +15,12 @@ router = APIRouter(prefix="/api", tags=["settings"])
 def _public() -> SettingsPublic:
     return SettingsPublic(
         llm_available=llm.available(),
-        model=llm.model,
         grounded=llm.available(),
+        personas=[
+            PersonaInfo(key=p.key, name=p.name, tagline=p.tagline, tier=p.tier)
+            for p in all_personas()
+        ],
+        default_persona=settings.default_persona,
         search_providers=settings.search_providers,
         modes=[m.value for m in ResearchMode],
     )

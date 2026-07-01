@@ -72,11 +72,19 @@ whole page) to keep the LLM prompt focused and cheap.
 
 ## The model layer (`app/llm/`)
 
-One hosted model behind one Anthropic-Messages-compatible base URL, owned by the
-operator. `LLMClient.available()` is false until `LLM_BASE_URL` + a real
-`LLM_API_KEY` are set; until then the pipeline uses its extractive fallback and
-never crashes. Keys live only in the backend and are never exposed by any
-endpoint.
+One hosted gateway (OpenAI- or Anthropic-compatible, `LLM_API_STYLE`) serves
+several models behind one base URL, owned by the operator. `LLMClient.available()`
+is false until `LLM_BASE_URL` + `LLM_API_KEY` are set; until then the pipeline
+uses its extractive fallback and never crashes. Keys live only in the backend.
+
+**Personas** (`personas.py`) are named researchers mapped to models, each with a
+tier-scaled system prompt that hides the underlying model. **Tools** (`tools.py`)
+let a persona `web_search` and `read_url` mid-answer; a `SourceCollector` turns
+any page it reads into a numbered, citable source, so tool-discovered evidence is
+cited exactly like the baseline pipeline's. **Zephyr** is a fusion: a fast planner
+(haiku) drafts a plan, an executor (llama) answers with tools, and a checker
+(haiku) verifies citations before the answer is finalized. The agentic loop is
+bounded by `LLM_MAX_TOOL_ROUNDS`.
 
 ## Caching (`app/cache/`)
 

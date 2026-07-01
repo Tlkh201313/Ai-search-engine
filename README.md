@@ -31,8 +31,11 @@ answers the moment you point it at a hosted model.
   Code/Technical, each with its own search breadth, ranking weights, and prompt.
 - **Free-first, no keys required** — DuckDuckGo + Wikipedia search out of the box;
   optional SearXNG, Brave, Bing, Mojeek.
-- **One hosted model** — a single server-owned, Anthropic-Messages-compatible
-  endpoint. End users never provide keys.
+- **Four research personas** — Solstice, Lunar, Tellus, and Zephyr (a fast
+  two-model fusion). Each is a distinct researcher with its own system prompt
+  and reasoning depth, served from one hosted gateway. End users never provide keys.
+- **In-app tools** — personas can `web_search` and `read_url` while answering;
+  any page they read becomes a numbered, citable source.
 - **Fast & resilient** — async fetching, retries with backoff, per-provider
   isolation, SQLite caching of searches / pages / research sessions.
 - **Secure by default** — SSRF-guarded fetching, request validation, rate
@@ -97,7 +100,7 @@ Ai-search-engine/
 - **Python** 3.11+
 - **Node** 18+ and **pnpm** (or npm)
 - Optional: **Docker** (for a local SearXNG instance)
-- Optional: a hosted **Anthropic-Messages-compatible** model endpoint for
+- Optional: a hosted model gateway (OpenAI- or Anthropic-compatible) for
   synthesized answers
 
 ## Quick start
@@ -129,23 +132,40 @@ Open http://localhost:3000.
 That's it — the app is fully functional in **extractive mode** (answers quoted
 directly from ranked sources) with no API keys.
 
-## Enabling synthesized answers (one hosted model)
+## Enabling synthesized answers (one hosted gateway, several models)
 
-Lumen uses **one** server-owned model behind **one** base URL that speaks the
-Anthropic Messages API. Set these in `apps/api/.env` and restart the backend:
+Lumen talks to **one** server-owned gateway that serves several models behind
+**one** base URL. Set these in `apps/api/.env` and restart the backend:
 
 ```bash
-LLM_BASE_URL=https://your-endpoint.example.com   # Anthropic-compatible base URL
-LLM_API_KEY=sk-...                               # your key (server-side only)
-LLM_MODEL=claude-sonnet-5                         # whatever your endpoint serves
+LLM_BASE_URL=https://homelander.ca   # your gateway base URL
+LLM_API_KEY=dummy                    # server-side only (a dummy value is fine if keyless)
+LLM_API_STYLE=openai                 # openai -> /v1/chat/completions (tools) | anthropic -> /v1/messages
+DEFAULT_PERSONA=lunar                # solstice | lunar | tellus | zephyr
 ```
 
-- The client `POST`s to `${LLM_BASE_URL}/v1/messages` with `x-api-key` +
-  `anthropic-version` headers (and a `Bearer` header for proxies that want it).
-- With no key, or `LLM_API_KEY=dummy`, Lumen stays in extractive mode and never
-  crashes.
-- Keys live only in the backend `.env`. They are never sent to the browser and
-  never exposed via `/api/settings`.
+- With `LLM_API_STYLE=openai` the client `POST`s to
+  `${LLM_BASE_URL}/v1/chat/completions` with a `Bearer` key and OpenAI-style
+  tool-calling (the right choice for a multi-provider gateway).
+- With no key, Lumen stays in extractive mode and never crashes.
+- Keys live only in the backend `.env` — never sent to the browser, never
+  exposed via `/api/settings`.
+
+### Research personas
+
+Each persona is a distinct researcher (it does not reveal any underlying model)
+mapped to a model on your gateway. Users pick one per query; personas may call
+`web_search` and `read_url` tools and cite anything they read.
+
+| Persona | Character | Model(s) |
+| --- | --- | --- |
+| **Solstice** | Deepest reasoning + adversarial verification (strongest) | `claude-opus` |
+| **Lunar** | Balanced and reliable (default) | `claude-4-sonnet` |
+| **Tellus** | Practical and grounded | `kimni-k2-5` |
+| **Zephyr** | Fast dual-model fusion: plan → execute → check | `llama-4-maverick` + `claude-3-haiku` |
+
+Prompts and model mapping live in `apps/api/app/llm/personas.py`; tools in
+`apps/api/app/llm/tools.py`.
 
 ## Optional: SearXNG for unlimited, key-free meta-search
 

@@ -26,6 +26,7 @@ class ResearchSession:
     id: str
     query: str
     mode: ResearchMode
+    persona: str = ""
     context: list[ConversationTurn] = field(default_factory=list)
     status: str = "running"  # running | complete | error
     created_at: float = field(default_factory=time.time)
@@ -73,11 +74,12 @@ class SessionRegistry:
         self,
         query: str,
         mode: ResearchMode,
+        persona: str = "",
         context: list[ConversationTurn] | None = None,
     ) -> ResearchSession:
         self._prune()
         session = ResearchSession(
-            id=uuid.uuid4().hex[:16], query=query, mode=mode, context=context or []
+            id=uuid.uuid4().hex[:16], query=query, mode=mode, persona=persona, context=context or []
         )
         self._sessions[session.id] = session
         return session

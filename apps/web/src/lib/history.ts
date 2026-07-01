@@ -1,4 +1,4 @@
-import type { ResearchMode } from './types';
+import type { Persona, ResearchMode } from './types';
 
 const RECENT_KEY = 'are:recent';
 const PENDING_KEY = 'are:pending';
@@ -38,6 +38,7 @@ export function clearRecent(): void {
 export interface PendingResearch {
   query: string;
   mode: ResearchMode;
+  persona: Persona;
 }
 
 export function setPending(id: string, pending: PendingResearch): void {

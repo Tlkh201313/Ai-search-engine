@@ -181,8 +181,8 @@ async def run_research(session: ResearchSession) -> ResearchResult:
             )
 
         t_answer = time.monotonic()
-        answer, model_info = await generate_answer(
-            query, mode, sources, on_delta, context=context
+        answer, model_info, sources = await generate_answer(
+            query, mode, sources, on_delta, context=context, persona_key=session.persona
         )
         answer_ms = int((time.monotonic() - t_answer) * 1000)
 
@@ -199,6 +199,7 @@ async def run_research(session: ResearchSession) -> ResearchResult:
             id=session.id,
             query=query,
             mode=mode_enum,
+            persona=session.persona,
             status="complete",
             answer=answer,
             sources=sources,
@@ -226,7 +227,7 @@ async def run_research(session: ResearchSession) -> ResearchResult:
     except Exception as exc:  # pragma: no cover - top-level safety net
         log.exception("research failed: %s", exc)
         result = ResearchResult(
-            id=session.id, query=query, mode=mode_enum, status="error",
+            id=session.id, query=query, mode=mode_enum, persona=session.persona, status="error",
             error=str(exc), created_at=datetime.now(UTC).isoformat(),
         )
         session.emit(
@@ -246,14 +247,16 @@ async def _finalize_empty(
     search_ms: int,
     fetch_ms: int = 0,
 ) -> ResearchResult:
+    from app.llm import get_persona
     from app.research.answer import _no_sources_answer
 
     answer = _no_sources_answer(session.query)
+    persona = get_persona(session.persona)
     total_ms = int((time.monotonic() - started) * 1000)
     result = ResearchResult(
-        id=session.id, query=session.query, mode=mode_enum, status="complete",
-        answer=answer, sources=[], confidence=0.0,
-        model=ModelInfo(model=llm.model, available=llm.available(), grounded=False),
+        id=session.id, query=session.query, mode=mode_enum, persona=session.persona,
+        status="complete", answer=answer, sources=[], confidence=0.0,
+        model=ModelInfo(model=persona.name, available=llm.available(), grounded=False),
         timings=ResearchTimings(search_ms=search_ms, fetch_ms=fetch_ms, total_ms=total_ms),
         created_at=datetime.now(UTC).isoformat(),
     )

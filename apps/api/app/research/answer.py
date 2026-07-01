@@ -1,12 +1,20 @@
-"""Grounded answer synthesis with an LLM, plus a deterministic fallback."""
+"""Answer synthesis: persona-driven, tool-using, with a deterministic fallback.
+
+Each research persona (see app/llm/personas.py) writes the answer using its own
+system prompt and may call in-app tools (web_search, read_url) to gather more
+evidence. Zephyr is a two-model fusion (plan → execute → check). When no model
+is configured, a deterministic extractive answer is returned instead.
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
 
-from app.llm import llm
+from app.config import settings
+from app.llm import Persona, get_persona, llm
 from app.llm.client import LLMError
+from app.llm.tools import TOOL_SCHEMAS, SourceCollector, execute_tool
 from app.logging import get_logger
 from app.models import Answer, ConversationTurn, ModelInfo, Source
 from app.research.citations import apply_citations, sanitize
@@ -16,40 +24,6 @@ from app.textutil import truncate_words
 log = get_logger("answer")
 
 DeltaCallback = Callable[[str], Awaitable[None]]
-
-_SYSTEM = """You are a rigorous research assistant. You answer questions using ONLY the numbered sources provided by the user. Follow every rule:
-
-1. Ground every factual claim in the sources and cite with bracketed numbers like [1] or [2][3].
-2. Never invent facts, URLs, dates, authors, or citations. Never cite a source number that was not provided.
-3. If the sources are weak, incomplete, or conflicting, say so plainly.
-4. Prefer specific, verifiable statements over vague ones.
-5. Write in a calm, clear, trustworthy voice. No hype, no filler.
-
-Respond in EXACTLY this markdown template (keep the headers verbatim):
-
-## Answer
-A direct 1-3 sentence answer with citations.
-
-## Details
-A well-structured explanation in markdown. Cite claims inline with [n].
-
-## Key Takeaways
-- concise point with citation [n]
-- concise point with citation [n]
-
-## Agreements
-- where multiple sources agree [n][m]  (write "None" if not applicable)
-
-## Disagreements
-- where sources conflict, attributed [n] vs [m]  (write "None" if not applicable)
-
-## Uncertainties
-- what is missing, unverified, or out of date  (write "None" if not applicable)
-
-## Follow-ups
-- a natural next question
-- a natural next question
-"""
 
 _HEADER_MAP = {
     "answer": "summary",
@@ -68,6 +42,142 @@ _LIST_FIELDS = {"key_takeaways", "agreements", "disagreements", "uncertainties",
 _HEADER_RE = re.compile(r"^#{1,6}\s+(.*)$")
 
 
+# --------------------------------------------------------------------------- #
+#  Public entry point
+# --------------------------------------------------------------------------- #
+async def generate_answer(
+    query: str,
+    mode: ModeConfig,
+    sources: list[Source],
+    on_delta: DeltaCallback | None = None,
+    context: list[ConversationTurn] | None = None,
+    persona_key: str | None = None,
+) -> tuple[Answer, ModelInfo, list[Source]]:
+    """Produce a grounded Answer. Returns (answer, model_info, final_sources)."""
+    context = context or []
+    persona = get_persona(persona_key)
+
+    if not sources:
+        return (
+            _no_sources_answer(query),
+            ModelInfo(model=persona.name, available=llm.available(), grounded=False),
+            [],
+        )
+
+    if llm.available():
+        try:
+            if persona.fusion:
+                final_text, collector = await _fusion_answer(query, mode, sources, context, persona)
+            else:
+                collector = SourceCollector(sources, query)
+                final_text = await _run_agent(
+                    query, mode, collector, context, persona.model or "", persona.system_prompt
+                )
+            answer, info = _finalize(final_text, collector, persona)
+            if on_delta:
+                await on_delta(answer.detail)
+            return answer, info, collector.sources
+        except LLMError as exc:
+            log.warning("persona '%s' failed, using extractive fallback: %s", persona.key, exc)
+
+    answer = _extractive_answer(query, sources)
+    if on_delta:
+        await on_delta(answer.detail)
+    return answer, ModelInfo(model=persona.name, available=llm.available(), grounded=False), sources
+
+
+# --------------------------------------------------------------------------- #
+#  Agentic tool loop (single model)
+# --------------------------------------------------------------------------- #
+async def _run_agent(
+    query: str,
+    mode: ModeConfig,
+    collector: SourceCollector,
+    context: list[ConversationTurn],
+    model: str,
+    system: str,
+    extra_system: str = "",
+) -> str:
+    """Run one model with tools until it produces a final answer."""
+    full_system = system if not extra_system else f"{system}\n\n{extra_system}"
+    messages: list[dict] = [
+        {"role": "user", "content": _build_user_prompt(query, mode, collector.sources, context)}
+    ]
+    tools = TOOL_SCHEMAS
+
+    for _ in range(settings.llm_max_tool_rounds):
+        res = await llm.chat(messages, model=model, system=full_system, tools=tools, temperature=0.2)
+        if not res.tool_calls:
+            return res.content
+        messages.append(
+            {"role": "assistant", "content": res.content or "", "tool_calls": [tc.raw for tc in res.tool_calls]}
+        )
+        for call in res.tool_calls:
+            output = await execute_tool(call.name, call.arguments, collector)
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
+
+    # Tool budget exhausted — force a final answer without tools.
+    messages.append(
+        {"role": "user", "content": "Stop using tools. Write the final answer now in the required template."}
+    )
+    res = await llm.chat(messages, model=model, system=full_system, tools=None, temperature=0.2)
+    return res.content
+
+
+# --------------------------------------------------------------------------- #
+#  Zephyr fusion: plan (haiku) → execute (llama, tools) → check (haiku)
+# --------------------------------------------------------------------------- #
+async def _fusion_answer(
+    query: str,
+    mode: ModeConfig,
+    sources: list[Source],
+    context: list[ConversationTurn],
+    persona: Persona,
+) -> tuple[str, SourceCollector]:
+    assert persona.fusion and persona.fusion_prompts
+    executor_model, planner_model = persona.fusion
+    planner_p, executor_p, checker_p = persona.fusion_prompts
+    collector = SourceCollector(sources, query)
+
+    # 1) PLAN (fast model, no tools) — best effort.
+    plan = ""
+    try:
+        titles = "\n".join(f"[{s.id}] {s.title} ({s.domain})" for s in collector.sources)
+        plan_res = await llm.chat(
+            [{"role": "user", "content": f"Question: {query}\n\nAvailable sources:\n{titles}"}],
+            model=planner_model,
+            system=planner_p,
+            temperature=0.3,
+        )
+        plan = plan_res.content.strip()
+    except LLMError as exc:
+        log.info("fusion planner skipped: %s", exc)
+
+    # 2) EXECUTE (capable fast model, with tools).
+    extra = f"Research plan to follow:\n{plan}" if plan else ""
+    draft = await _run_agent(query, mode, collector, context, executor_model, executor_p, extra)
+
+    # 3) CHECK (fast model, no tools) — verify + fix; fall back to the draft.
+    try:
+        numbered = "\n".join(
+            f"[{s.id}] {s.title} ({s.domain})\n{s.excerpt or s.snippet}" for s in collector.sources
+        )
+        check_res = await llm.chat(
+            [{"role": "user", "content": f"Question: {query}\n\nDraft answer:\n{draft}\n\nSources:\n{numbered}"}],
+            model=planner_model,
+            system=checker_p,
+            temperature=0.1,
+        )
+        final = check_res.content.strip()
+        return (final or draft), collector
+    except LLMError as exc:
+        log.info("fusion checker skipped: %s", exc)
+        return draft, collector
+
+
+# --------------------------------------------------------------------------- #
+#  Shared helpers
+# --------------------------------------------------------------------------- #
 def _build_user_prompt(
     query: str, mode: ModeConfig, sources: list[Source], context: list[ConversationTurn]
 ) -> str:
@@ -79,7 +189,7 @@ def _build_user_prompt(
             if turn.answer:
                 lines.append(f"A: {truncate_words(turn.answer, 60)}")
         lines.append("")
-    lines += [f"Question: {query}", "", f"Mode: {mode.label} — {mode.style}", "", "Sources:"]
+    lines += [f"Question: {query}", "", f"Mode: {mode.label} — {mode.style}", "", "Sources already retrieved:"]
     for s in sources:
         meta = s.domain
         if s.published_at:
@@ -87,9 +197,40 @@ def _build_user_prompt(
         lines.append(f"\n[{s.id}] {s.title} ({meta})")
         lines.append(s.excerpt or s.snippet)
     lines.append(
-        "\nWrite the answer now using only these sources and the required template."
+        "\nRead these first. Use tools only to fill genuine gaps, then write the answer in the required template."
     )
     return "\n".join(lines)
+
+
+def _finalize(
+    final_text: str, collector: SourceCollector, persona: Persona
+) -> tuple[Answer, ModelInfo]:
+    parsed = _parse_sections(final_text)
+    valid_ids = {s.id for s in collector.sources}
+
+    summary = sanitize(str(parsed.get("summary", "")), valid_ids)
+    detail = sanitize(str(parsed.get("detail", "")) or final_text, valid_ids)
+    takeaways = [sanitize(t, valid_ids) for t in parsed.get("key_takeaways", [])]  # type: ignore
+    agreements = [sanitize(t, valid_ids) for t in parsed.get("agreements", [])]  # type: ignore
+    disagreements = [sanitize(t, valid_ids) for t in parsed.get("disagreements", [])]  # type: ignore
+    uncertainties = list(parsed.get("uncertainties", []))  # type: ignore
+    follow_ups = list(parsed.get("follow_ups", []))  # type: ignore
+
+    used = apply_citations([summary, detail, *takeaways, *agreements, *disagreements], collector.sources)
+    confidence = _compute_confidence(collector.sources, used, grounded=True)
+
+    answer = Answer(
+        summary=summary or truncate_words(detail, 40),
+        detail=detail,
+        key_takeaways=takeaways,
+        agreements=agreements,
+        disagreements=disagreements,
+        uncertainties=uncertainties,
+        follow_ups=follow_ups[:4],
+        citations=used,
+        confidence=confidence,
+    )
+    return answer, ModelInfo(model=persona.name, available=True, grounded=True)
 
 
 def _parse_sections(text: str) -> dict[str, object]:
@@ -112,9 +253,7 @@ def _parse_sections(text: str) -> dict[str, object]:
             items = []
             for ln in lines:
                 stripped = ln.strip().lstrip("-*• ").strip()
-                if not stripped:
-                    continue
-                if stripped.lower() in {"none", "n/a", "none.", "not applicable"}:
+                if not stripped or stripped.lower() in {"none", "n/a", "none.", "not applicable"}:
                     continue
                 items.append(stripped)
             result[key] = items
@@ -133,78 +272,8 @@ def _compute_confidence(sources: list[Source], used: list[int], grounded: bool) 
     return round(min(0.97, base), 2)
 
 
-async def generate_answer(
-    query: str,
-    mode: ModeConfig,
-    sources: list[Source],
-    on_delta: DeltaCallback | None = None,
-    context: list[ConversationTurn] | None = None,
-) -> tuple[Answer, ModelInfo]:
-    """Produce a grounded Answer. Streams deltas via ``on_delta`` when possible."""
-    context = context or []
-    if not sources:
-        return _no_sources_answer(query), ModelInfo(
-            model=llm.model, available=llm.available(), grounded=False
-        )
-
-    if llm.available():
-        try:
-            return await _llm_answer(query, mode, sources, on_delta, context)
-        except LLMError as exc:
-            log.warning("LLM answer failed, using extractive fallback: %s", exc)
-
-    answer = _extractive_answer(query, mode, sources)
-    if on_delta:
-        await on_delta(answer.detail)
-    return answer, ModelInfo(model=llm.model, available=llm.available(), grounded=False)
-
-
-async def _llm_answer(
-    query: str,
-    mode: ModeConfig,
-    sources: list[Source],
-    on_delta: DeltaCallback | None,
-    context: list[ConversationTurn],
-) -> tuple[Answer, ModelInfo]:
-    user_prompt = _build_user_prompt(query, mode, sources, context)
-    chunks: list[str] = []
-    async for delta in llm.stream(
-        [{"role": "user", "content": user_prompt}], system=_SYSTEM, temperature=0.2
-    ):
-        chunks.append(delta)
-        if on_delta:
-            await on_delta(delta)
-    full = "".join(chunks).strip()
-    parsed = _parse_sections(full)
-
-    valid_ids = {s.id for s in sources}
-    summary = sanitize(str(parsed.get("summary", "")), valid_ids)
-    detail = sanitize(str(parsed.get("detail", "")) or full, valid_ids)
-    takeaways = [sanitize(t, valid_ids) for t in parsed.get("key_takeaways", [])]  # type: ignore
-    agreements = [sanitize(t, valid_ids) for t in parsed.get("agreements", [])]  # type: ignore
-    disagreements = [sanitize(t, valid_ids) for t in parsed.get("disagreements", [])]  # type: ignore
-    uncertainties = list(parsed.get("uncertainties", []))  # type: ignore
-    follow_ups = list(parsed.get("follow_ups", []))  # type: ignore
-
-    used = apply_citations([summary, detail, *takeaways, *agreements, *disagreements], sources)
-    confidence = _compute_confidence(sources, used, grounded=True)
-
-    answer = Answer(
-        summary=summary or truncate_words(detail, 40),
-        detail=detail,
-        key_takeaways=takeaways,
-        agreements=agreements,
-        disagreements=disagreements,
-        uncertainties=uncertainties,
-        follow_ups=follow_ups[:4],
-        citations=used,
-        confidence=confidence,
-    )
-    return answer, ModelInfo(model=llm.model, available=True, grounded=True)
-
-
-def _extractive_answer(query: str, mode: ModeConfig, sources: list[Source]) -> Answer:
-    """Deterministic, source-grounded answer when no LLM is configured."""
+def _extractive_answer(query: str, sources: list[Source]) -> Answer:
+    """Deterministic, source-grounded answer when no model is configured."""
     top = sources[: min(5, len(sources))]
     detail_lines = [
         "_No language model is configured, so this is a direct extract from the "

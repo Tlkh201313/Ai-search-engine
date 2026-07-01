@@ -10,19 +10,20 @@ import { StatusNotice } from '@/components/StatusNotice';
 import { TopBar } from '@/components/TopBar';
 import { ApiError, createResearch } from '@/lib/api';
 import { addRecent, setPending } from '@/lib/history';
-import type { ResearchMode } from '@/lib/types';
+import { DEFAULT_PERSONA } from '@/lib/personas';
+import type { Persona, ResearchMode } from '@/lib/types';
 
 export default function HomePage() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const start = async (query: string, mode: ResearchMode) => {
+  const start = async (query: string, mode: ResearchMode, persona: Persona = DEFAULT_PERSONA) => {
     setBusy(true);
     setError(null);
     try {
-      const { id } = await createResearch(query, mode);
-      setPending(id, { query, mode });
+      const { id } = await createResearch(query, mode, persona);
+      setPending(id, { query, mode, persona });
       addRecent({ id, query, mode, ts: Date.now() });
       router.push(`/research/${id}`);
     } catch (err) {

@@ -5,18 +5,19 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.config import settings
-from app.llm import llm
+from app.llm import get_persona, llm
 from app.models import HealthResponse, ModelInfo
 
 router = APIRouter(tags=["health"])
 
 
 def _health() -> HealthResponse:
+    persona = get_persona(settings.default_persona)
     return HealthResponse(
         status="ok",
         version=settings.version,
         environment=settings.environment,
-        llm=ModelInfo(model=llm.model, available=llm.available(), grounded=llm.available()),
+        llm=ModelInfo(model=persona.name, available=llm.available(), grounded=llm.available()),
         search_providers=settings.search_providers,
     )
 

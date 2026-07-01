@@ -3,19 +3,29 @@
 import { ArrowUp } from 'lucide-react';
 import { useRef, useState } from 'react';
 
-import type { ResearchMode } from '@/lib/types';
+import type { Persona, ResearchMode } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 import { ModeSelector } from './ModeSelector';
+import { PersonaSelector } from './PersonaSelector';
 
 interface Props {
-  onSubmit: (query: string, mode: ResearchMode) => void;
+  onSubmit: (query: string, mode: ResearchMode, persona: Persona) => void;
   mode: ResearchMode;
   onModeChange: (mode: ResearchMode) => void;
+  persona: Persona;
+  onPersonaChange: (persona: Persona) => void;
   busy?: boolean;
 }
 
-export function ChatInput({ onSubmit, mode, onModeChange, busy }: Props) {
+export function ChatInput({
+  onSubmit,
+  mode,
+  onModeChange,
+  persona,
+  onPersonaChange,
+  busy,
+}: Props) {
   const [query, setQuery] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -29,7 +39,7 @@ export function ChatInput({ onSubmit, mode, onModeChange, busy }: Props) {
   const submit = () => {
     const trimmed = query.trim();
     if (trimmed.length < 2 || busy) return;
-    onSubmit(trimmed, mode);
+    onSubmit(trimmed, mode, persona);
     setQuery('');
     if (ref.current) ref.current.style.height = 'auto';
   };
@@ -56,7 +66,10 @@ export function ChatInput({ onSubmit, mode, onModeChange, busy }: Props) {
         className="scroll-slim max-h-[160px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint"
       />
       <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
-        <ModeSelector value={mode} onChange={onModeChange} direction="up" />
+        <div className="flex flex-wrap items-center gap-2">
+          <ModeSelector value={mode} onChange={onModeChange} direction="up" />
+          <PersonaSelector value={persona} onChange={onPersonaChange} direction="up" />
+        </div>
         <button
           type="button"
           onClick={submit}

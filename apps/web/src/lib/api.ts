@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  Persona,
   ProgressEvent,
   ResearchMode,
   ResearchResult,
@@ -40,12 +41,13 @@ export interface ConversationTurn {
 export async function createResearch(
   query: string,
   mode: ResearchMode,
+  persona: Persona,
   context: ConversationTurn[] = [],
-): Promise<{ id: string; query: string; mode: ResearchMode }> {
+): Promise<{ id: string; query: string; mode: ResearchMode; persona: string }> {
   const res = await fetch(`${API_BASE}/api/research`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ query, mode, context }),
+    body: JSON.stringify({ query, mode, persona, context }),
   });
   return json(res);
 }

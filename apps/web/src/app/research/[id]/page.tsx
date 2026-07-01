@@ -12,7 +12,8 @@ import { Turn, type TurnData } from '@/components/Turn';
 import type { ResearchState } from '@/hooks/useResearch';
 import { ApiError, createResearch, type ConversationTurn } from '@/lib/api';
 import { addRecent, takePending } from '@/lib/history';
-import type { ResearchMode, Source } from '@/lib/types';
+import { DEFAULT_PERSONA } from '@/lib/personas';
+import type { Persona, ResearchMode, Source } from '@/lib/types';
 
 interface TurnSummary {
   sources: Source[];
@@ -31,6 +32,7 @@ export default function ResearchPage() {
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mode, setMode] = useState<ResearchMode>('quick');
+  const [persona, setPersona] = useState<Persona>(DEFAULT_PERSONA);
   const [busy, setBusy] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
 
@@ -39,6 +41,8 @@ export default function ResearchPage() {
   turnsRef.current = turns;
   const summariesRef = useRef(summaries);
   summariesRef.current = summaries;
+  const personaRef = useRef(persona);
+  personaRef.current = persona;
 
   useEffect(() => {
     const pending = takePending(id);
@@ -48,7 +52,10 @@ export default function ResearchPage() {
         : { id, query: '', mode: 'quick', live: false },
     ]);
     setActiveTurnId(id);
-    if (pending) setMode(pending.mode);
+    if (pending) {
+      setMode(pending.mode);
+      setPersona(pending.persona);
+    }
   }, [id]);
 
   const handleState = useCallback((turnId: string, state: ResearchState) => {
@@ -95,34 +102,39 @@ export default function ResearchPage() {
     [scrollToSource],
   );
 
-  const handleFollowUp = useCallback(async (query: string, m: ResearchMode) => {
-    setBusy(true);
-    setFollowError(null);
-    // Build conversation context from completed prior turns (in order).
-    const context: ConversationTurn[] = turnsRef.current
-      .map((t) => {
-        const s = summariesRef.current[t.id];
-        return { query: s?.query || t.query, answer: s?.answer || '' };
-      })
-      .filter((c) => c.query && c.answer);
-    try {
-      const { id: newId } = await createResearch(query, m, context);
-      addRecent({ id: newId, query, mode: m, ts: Date.now() });
-      setTurns((prev) => [...prev, { id: newId, query, mode: m, live: true }]);
-      setActiveTurnId(newId);
-      setMode(m);
-      window.setTimeout(
-        () => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }),
-        70,
-      );
-    } catch (err) {
-      setFollowError(
-        err instanceof ApiError ? err.message : "Couldn't reach the research API.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  const handleFollowUp = useCallback(
+    async (query: string, m: ResearchMode, p?: Persona) => {
+      setBusy(true);
+      setFollowError(null);
+      const chosen = p ?? personaRef.current;
+      // Build conversation context from completed prior turns (in order).
+      const context: ConversationTurn[] = turnsRef.current
+        .map((t) => {
+          const s = summariesRef.current[t.id];
+          return { query: s?.query || t.query, answer: s?.answer || '' };
+        })
+        .filter((c) => c.query && c.answer);
+      try {
+        const { id: newId } = await createResearch(query, m, chosen, context);
+        addRecent({ id: newId, query, mode: m, ts: Date.now() });
+        setTurns((prev) => [...prev, { id: newId, query, mode: m, live: true }]);
+        setActiveTurnId(newId);
+        setMode(m);
+        setPersona(chosen);
+        window.setTimeout(
+          () => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }),
+          70,
+        );
+      } catch (err) {
+        setFollowError(
+          err instanceof ApiError ? err.message : "Couldn't reach the research API.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
 
   const active = summaries[activeTurnId];
   const activeSources = active?.sources ?? [];
@@ -157,6 +169,8 @@ export default function ResearchPage() {
                 onSubmit={handleFollowUp}
                 mode={mode}
                 onModeChange={setMode}
+                persona={persona}
+                onPersonaChange={setPersona}
                 busy={busy}
               />
             </div>

@@ -50,13 +50,19 @@ class Settings(BaseSettings):
     fetch_concurrency: int = 6
     allow_private_ips: bool = False
 
-    # --- LLM (single server-hosted, Anthropic Messages API compatible) ---
-    llm_base_url: str = "https://api.anthropic.com"
-    llm_api_key: str = ""  # operator sets this; empty/"dummy" => extractive fallback
-    llm_model: str = "claude-sonnet-5"
+    # --- LLM (single server-hosted gateway; multiple models behind one URL) ---
+    # api_style: "openai" -> POST {base}/v1/chat/completions (default, supports tools)
+    #            "anthropic" -> POST {base}/v1/messages
+    llm_base_url: str = "https://homelander.ca"
+    llm_api_key: str = ""  # operator sets this (a dummy value is fine); empty => extractive
+    llm_api_style: str = "openai"
     llm_max_tokens: int = 2048
-    llm_timeout: float = 60.0
+    llm_timeout: float = 90.0
     llm_anthropic_version: str = "2023-06-01"
+    # Persona used when the request does not specify one.
+    default_persona: str = "lunar"
+    # Max tool-call rounds the model may take per answer.
+    llm_max_tool_rounds: int = 4
 
     @field_validator("cors_origins", "search_providers", mode="before")
     @classmethod
@@ -72,8 +78,8 @@ class Settings(BaseSettings):
 
     @property
     def llm_configured(self) -> bool:
-        key = self.llm_api_key.strip().lower()
-        return bool(self.llm_base_url.strip()) and key not in {"", "dummy", "changeme"}
+        # A dummy key is allowed (the gateway may be keyless); only empty disables.
+        return bool(self.llm_base_url.strip()) and bool(self.llm_api_key.strip())
 
 
 @lru_cache

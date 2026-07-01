@@ -7,6 +7,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.llm import get_persona
 from app.models import ResearchCreated, ResearchRequest, ResearchResult
 from app.research import run_research, sessions
 from app.security.ratelimit import rate_limit
@@ -25,11 +26,12 @@ _SSE_HEADERS = {
 
 @router.post("/research", response_model=ResearchCreated, dependencies=[Depends(rate_limit)])
 async def create_research(req: ResearchRequest) -> ResearchCreated:
-    session = sessions.create(req.query, req.mode, context=req.context)
+    persona = get_persona(req.persona).key  # normalize / validate
+    session = sessions.create(req.query, req.mode, persona=persona, context=req.context)
     task = asyncio.create_task(run_research(session))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
-    return ResearchCreated(id=session.id, query=req.query, mode=req.mode)
+    return ResearchCreated(id=session.id, query=req.query, mode=req.mode, persona=persona)
 
 
 @router.get("/research/{research_id}/stream")

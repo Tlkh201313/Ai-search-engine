@@ -112,6 +112,7 @@ class ConversationTurn(BaseModel):
 class ResearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=2000)
     mode: ResearchMode = ResearchMode.quick
+    persona: str | None = None  # solstice | lunar | tellus | zephyr (None = default)
     max_sources: int | None = Field(default=None, ge=1, le=20)
     # Prior turns in the same conversation (most recent last), for follow-ups.
     context: list[ConversationTurn] = Field(default_factory=list, max_length=8)
@@ -129,12 +130,14 @@ class ResearchCreated(BaseModel):
     id: str
     query: str
     mode: ResearchMode
+    persona: str
 
 
 class ResearchResult(BaseModel):
     id: str
     query: str
     mode: ResearchMode
+    persona: str = ""
     status: str = "complete"  # running | complete | error
     answer: Answer = Field(default_factory=Answer)
     sources: list[Source] = Field(default_factory=list)
@@ -194,12 +197,20 @@ class HealthResponse(BaseModel):
     search_providers: list[str]
 
 
+class PersonaInfo(BaseModel):
+    key: str
+    name: str
+    tagline: str
+    tier: int
+
+
 class SettingsPublic(BaseModel):
     """Non-secret runtime settings the UI may read. No keys are ever exposed."""
 
     llm_available: bool
-    model: str
     grounded: bool  # whether answers are LLM-synthesized (vs extractive fallback)
+    personas: list[PersonaInfo]
+    default_persona: str
     search_providers: list[str]
     modes: list[str]
 

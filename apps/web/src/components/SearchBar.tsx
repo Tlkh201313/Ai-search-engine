@@ -3,14 +3,17 @@
 import { ArrowUp, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { ResearchMode } from '@/lib/types';
+import { DEFAULT_PERSONA } from '@/lib/personas';
+import type { Persona, ResearchMode } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 import { ModeSelector } from './ModeSelector';
+import { PersonaSelector } from './PersonaSelector';
 
 interface Props {
-  onSubmit: (query: string, mode: ResearchMode) => void;
+  onSubmit: (query: string, mode: ResearchMode, persona: Persona) => void;
   initialMode?: ResearchMode;
+  initialPersona?: Persona;
   initialQuery?: string;
   autoFocus?: boolean;
   busy?: boolean;
@@ -19,12 +22,14 @@ interface Props {
 export function SearchBar({
   onSubmit,
   initialMode = 'quick',
+  initialPersona = DEFAULT_PERSONA,
   initialQuery = '',
   autoFocus = true,
   busy = false,
 }: Props) {
   const [query, setQuery] = useState(initialQuery);
   const [mode, setMode] = useState<ResearchMode>(initialMode);
+  const [persona, setPersona] = useState<Persona>(initialPersona);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -55,7 +60,7 @@ export function SearchBar({
   const submit = () => {
     const trimmed = query.trim();
     if (trimmed.length < 2 || busy) return;
-    onSubmit(trimmed, mode);
+    onSubmit(trimmed, mode, persona);
   };
 
   const canSubmit = query.trim().length >= 2 && !busy;
@@ -90,7 +95,10 @@ export function SearchBar({
         </div>
 
         <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-2">
-          <ModeSelector value={mode} onChange={setMode} />
+          <div className="flex flex-wrap items-center gap-2">
+            <ModeSelector value={mode} onChange={setMode} />
+            <PersonaSelector value={persona} onChange={setPersona} />
+          </div>
           <div className="flex items-center gap-2">
             <kbd className="hidden select-none items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[10px] text-faint sm:inline-flex">
               Enter

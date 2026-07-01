@@ -8,6 +8,15 @@ export type ResearchMode =
   | 'academic'
   | 'code';
 
+export type Persona = 'solstice' | 'lunar' | 'tellus' | 'zephyr';
+
+export interface PersonaInfo {
+  key: string;
+  name: string;
+  tagline: string;
+  tier: number;
+}
+
 export type ProgressStage =
   | 'understanding'
   | 'searching'
@@ -75,6 +84,7 @@ export interface ResearchResult {
   id: string;
   query: string;
   mode: ResearchMode;
+  persona: string;
   status: 'running' | 'complete' | 'error';
   answer: Answer;
   sources: Source[];
@@ -107,8 +117,9 @@ export interface ProgressEvent {
 
 export interface AppSettings {
   llm_available: boolean;
-  model: string;
   grounded: boolean;
+  personas: PersonaInfo[];
+  default_persona: string;
   search_providers: string[];
   modes: string[];
 }
