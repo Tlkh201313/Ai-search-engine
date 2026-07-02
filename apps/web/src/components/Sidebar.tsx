@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, Home, Library, Plus } from 'lucide-react';
+import { Clock, Home, Library, Newspaper, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -58,6 +58,13 @@ export function Sidebar() {
         <Brand />
         <div className="flex items-center gap-1">
           <Link
+            href="/news"
+            aria-label="News"
+            className="flex h-9 w-9 items-center justify-center rounded-full text-muted hover:bg-ink/5 hover:text-ink"
+          >
+            <Newspaper className="h-5 w-5" />
+          </Link>
+          <Link
             href="/"
             aria-label="New thread"
             className="flex h-9 w-9 items-center justify-center rounded-full text-muted hover:bg-ink/5 hover:text-ink"
@@ -97,6 +104,18 @@ export function Sidebar() {
           >
             <Home className="h-4 w-4" />
             Home
+          </Link>
+          <Link
+            href="/news"
+            className={cn(
+              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+              pathname === '/news'
+                ? 'bg-ink/5 text-ink'
+                : 'text-muted hover:bg-ink/5 hover:text-ink',
+            )}
+          >
+            <Newspaper className="h-4 w-4" />
+            News
           </Link>
           <div className="flex items-center gap-3 px-3 pb-1 pt-3 text-sm font-medium text-muted">
             <Library className="h-4 w-4" />

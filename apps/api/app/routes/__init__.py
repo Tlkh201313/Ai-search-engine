@@ -1,6 +1,6 @@
 """API routers."""
 
-from app.routes import fetch, health, research, search, settings, sources
+from app.routes import fetch, health, news, research, search, settings, sources
 
 routers = [
     health.router,
@@ -9,6 +9,7 @@ routers = [
     fetch.router,
     sources.router,
     settings.router,
+    news.router,
 ]
 
 __all__ = ["routers"]

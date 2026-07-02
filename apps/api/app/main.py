@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.cache import cache
@@ -41,6 +42,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Compress large JSON payloads (news, research results) — big win on slow links.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -68,6 +72,7 @@ async def root() -> dict:
             "POST /api/fetch",
             "GET /api/sources?research_id=",
             "GET /api/settings",
+            "GET /api/news?category=&limit=",
         ],
     }
 

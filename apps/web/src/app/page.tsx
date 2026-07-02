@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import { ExamplePrompts } from '@/components/ExamplePrompts';
+import { NewsTicker } from '@/components/NewsTicker';
 import { SearchBar } from '@/components/SearchBar';
 import { StatusNotice } from '@/components/StatusNotice';
 import { ApiError, createResearch } from '@/lib/api';
@@ -64,7 +65,11 @@ export default function HomePage() {
           <StatusNotice />
         </div>
 
-        <div className="mt-8">
+        <div className="mt-8 animate-slide-up" style={{ animationDelay: '120ms' }}>
+          <NewsTicker />
+        </div>
+
+        <div className="mt-6">
           <ExamplePrompts onPick={start} />
         </div>
       </main>
