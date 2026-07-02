@@ -1,0 +1,47 @@
+# Optional local stack for Lumen.
+#
+#   docker compose up searxng            # just the key-free meta-search engine
+#   docker compose --profile full up     # api + web + searxng, all together
+#
+# For local dev you usually only need `searxng`, and run the api/web directly.
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - '8888:8080'
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+      # Enable the JSON output format Lumen consumes.
+      - SEARXNG_SEARCH_FORMATS=html,json
+    restart: unless-stopped
+
+  api:
+    profiles: ['full']
+    build:
+      context: ./apps/api
+    ports:
+      - '8000:8000'
+    environment:
+      - CORS_ORIGINS=http://localhost:3000
+      - SEARCH_PROVIDERS=searxng,wikipedia
+      - SEARXNG_URL=http://searxng:8080
+      # Configure a hosted model to enable synthesized answers:
+      # - LLM_BASE_URL=https://your-endpoint.example.com
+      # - LLM_API_KEY=your-key
+      # - LLM_MODEL=claude-sonnet-5
+    depends_on:
+      - searxng
+    restart: unless-stopped
+
+  web:
+    profiles: ['full']
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - '3000:3000'
+    depends_on:
+      - api
+    restart: unless-stopped
